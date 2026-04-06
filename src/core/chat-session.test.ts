@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TFile } from "obsidian";
 import { ChatSession, type ChatSessionDelegate, type VaultAdapter } from "./chat-session";
 import type { AIChatSettings } from "../settings";
-import type { LlmClient, StreamResult } from "./llm";
+import type { ChatMessage, LlmClient, StreamResult } from "./llm";
 import * as llm from "./llm";
 
 function makeFile(path: string): TFile {
@@ -134,5 +134,116 @@ describe("ChatSession", () => {
     expect(delegate.promptTokenLimitChoice).toHaveBeenCalled();
     expect(appendSpy).not.toHaveBeenCalled();
     expect(client.stream).not.toHaveBeenCalled();
+  });
+
+  it("truncates history when user chooses truncate, then streams successfully", async () => {
+    vi.spyOn(llm, "estimatePromptTokens").mockImplementation((msgs) => {
+      const n = msgs.length;
+      if (n >= 4) return 200_000;
+      return 50_000;
+    });
+    const appendSpy = vi.fn(async () => {});
+    const vault = makeVault(appendSpy);
+    const delegate = makeDelegate();
+    vi.mocked(delegate.promptTokenLimitChoice).mockResolvedValueOnce("truncate");
+    const result: StreamResult = {
+      content: "Hello",
+      reasoning: "",
+      usage: { promptTokens: 1, completionTokens: 1 },
+    };
+    const client: LlmClient = {
+      stream: vi.fn(async (_m, _o, onChunk) => {
+        onChunk("Hello", "");
+        return result;
+      }),
+    };
+    const session = new ChatSession(vault, delegate, () => settings, () => client);
+    session.lockTarget(makeFile("note.md"));
+    const internal = session as unknown as { _messages: ChatMessage[] };
+    internal._messages = [
+      { role: "user", content: "old-u1" },
+      { role: "assistant", content: "old-a1" },
+      { role: "user", content: "old-u2" },
+      { role: "assistant", content: "old-a2" },
+    ];
+
+    await session.send("hi", "");
+
+    expect(delegate.promptTokenLimitChoice).toHaveBeenCalledTimes(1);
+    expect(delegate.onMessagesChanged).toHaveBeenCalled();
+    expect(client.stream).toHaveBeenCalled();
+    expect(appendSpy).toHaveBeenCalledTimes(1);
+    expect(session.messages).toHaveLength(4);
+    expect(session.messages[0]).toEqual({ role: "user", content: "old-u2" });
+    expect(session.messages[1]).toEqual({ role: "assistant", content: "old-a2" });
+    expect(session.messages[2]).toEqual({ role: "user", content: "hi" });
+    expect(session.messages[3]).toEqual({ role: "assistant", content: "Hello" });
+    expect(delegate.onTurnComplete).toHaveBeenCalled();
+    expect(delegate.onTurnRolledBack).not.toHaveBeenCalled();
+  });
+
+  it("rolls back and does not update messages when appendToFile rejects", async () => {
+    const appendSpy = vi.fn(async () => {
+      throw new Error("append failed");
+    });
+    const vault = makeVault(appendSpy);
+    const delegate = makeDelegate();
+    const result: StreamResult = {
+      content: "Hello",
+      reasoning: "",
+      usage: { promptTokens: 1, completionTokens: 1 },
+    };
+    const client: LlmClient = {
+      stream: vi.fn(async (_m, _o, onChunk) => {
+        onChunk("Hello", "");
+        return result;
+      }),
+    };
+    const session = new ChatSession(vault, delegate, () => settings, () => client);
+    session.lockTarget(makeFile("note.md"));
+
+    await session.send("hi", "");
+
+    expect(appendSpy).toHaveBeenCalledTimes(1);
+    expect(session.messages).toHaveLength(0);
+    expect(delegate.onTurnRolledBack).toHaveBeenCalled();
+    expect(delegate.onTurnComplete).not.toHaveBeenCalled();
+    expect(delegate.showNotice).toHaveBeenCalledWith("AI Chat: append failed");
+  });
+
+  it("rolls back when locked file disappears after stream before append", async () => {
+    let resolveCalls = 0;
+    const vault: VaultAdapter = {
+      resolveFile: vi.fn((path: string) => {
+        resolveCalls += 1;
+        return resolveCalls === 1 ? makeFile(path) : null;
+      }),
+      appendToFile: vi.fn(async () => {}),
+      buildWikilinkContext: vi.fn(async () => ""),
+    };
+    const delegate = makeDelegate();
+    const result: StreamResult = {
+      content: "Hello",
+      reasoning: "",
+      usage: { promptTokens: 1, completionTokens: 1 },
+    };
+    const client: LlmClient = {
+      stream: vi.fn(async (_m, _o, onChunk) => {
+        onChunk("Hello", "");
+        return result;
+      }),
+    };
+    const session = new ChatSession(vault, delegate, () => settings, () => client);
+    session.lockTarget(makeFile("gone.md"));
+
+    await session.send("hi", "");
+
+    expect(vault.resolveFile).toHaveBeenCalledTimes(2);
+    expect(vault.appendToFile).not.toHaveBeenCalled();
+    expect(session.messages).toHaveLength(0);
+    expect(delegate.onTurnRolledBack).toHaveBeenCalled();
+    expect(delegate.showNotice).toHaveBeenCalledWith(
+      "AI Chat: Target note no longer exists; cannot append."
+    );
   });
 });
