@@ -5,7 +5,7 @@
 | 項目 | 内容 |
 |------|------|
 | プラグイン | Obsidian AI Chat（`obsidian-ai-chat`） |
-| 対象バージョン | `manifest.json` **1.2.0** ベースの実装（詳細は [`AGENT_HANDOFF.md`](AGENT_HANDOFF.md)） |
+| 対象バージョン | `manifest.json` **1.3.0** ベースの実装（詳細は [`AGENT_HANDOFF.md`](AGENT_HANDOFF.md)） |
 | スコープ | API 送信前の推定トークン判定、超過時のユーザー確認、件数固定（10 件）によるサイレント切り捨ての廃止 |
 
 ---

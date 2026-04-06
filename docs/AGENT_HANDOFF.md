@@ -8,8 +8,8 @@
 
 | 項目 | 値 |
 |------|-----|
-| バージョン | **1.2.0**（`manifest.json` / `package.json` と一致） |
-| 直近の主な変更 | **v1.2.0:** トークンベース送信前チェック、`TokenLimitModal`、**推定プロンプトトークン**（`ai-chat-token-estimate`）。**リファクタ:** 送信・履歴・追記は [`src/core/chat-session.ts`](../src/core/chat-session.ts) に集約（挙動は SPEC と同一を意図。詳細は §5.6） |
+| バージョン | **1.3.0**（`manifest.json` / `package.json` と一致） |
+| 直近の主な変更 | **v1.3.0:** メッセージ時刻（`createdAt`、Vault `<!-- ai-chat-at -->`、UI `ai-chat-msg-time`、ADR 0003、Phase K）。**v1.2.1 相当（同梱）:** Android 手動サイドロード、Web Search 確認 Modal、狭幅ツールバー CSS、Phase J。**v1.2.0 以前:** トークンベース送信前チェック、`TokenLimitModal`、推定プロンプトトークン。送信・履歴・追記は [`src/core/chat-session.ts`](../src/core/chat-session.ts)（詳細は [`docs/SPEC.md`](SPEC.md)） |
 
 ---
 

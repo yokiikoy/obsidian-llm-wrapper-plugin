@@ -11,7 +11,7 @@
 | ---------------------- | ----------------------------------------------------------------- |
 | 名称                     | Obsidian AI Chat                                                  |
 | プラグイン ID               | `obsidian-ai-chat`                                                |
-| バージョン（`manifest.json`） | **1.2.0**                                                         |
+| バージョン（`manifest.json`） | **1.3.0**                                                         |
 | 目的                     | Vault 内で LLM とチャットし、**ロックした Markdown ノート末尾へ**会話を追記する              |
 | プロバイダ                  | **DeepSeek**（`deepseek-chat`）/ **Gemini**（`gemini-2.5-flash`、SSE） |
 | エントリ                   | `src/main.ts` → esbuild で `main.js`                               |

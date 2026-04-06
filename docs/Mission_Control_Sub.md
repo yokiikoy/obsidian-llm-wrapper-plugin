@@ -43,3 +43,4 @@
 - 2026-04-06T18:52:10+09:00: Web Search ON + Gemini 送信時に毎回確認ダイアログ（confirm）を追加。Cancel 時は送信中止。
 - 2026-04-06T19:09:01+09:00: Phase J 完了。Android 手動導入、`openWebSearchConfirmModal`（Modal）へ置換、狭幅 CSS、`TEST_SPEC` 手動検証（A1–A10）。`Mission_Phase_J_Mobile_Android` を追加。
 - 2026-04-06T20:14:30+09:00: Phase K 完了（後追い Mission 化）。メッセージ時刻（UI + Vault）、ADR 0003、コミット `1c69ddf` / `e06fa67`。`Mission_Phase_K_Message_Timestamps` を追加。
+- 2026-04-06T20:20:00+09:00: **v1.3.0** リリース。`manifest.json` / `package.json` を `1.3.0` に。Git タグ `v1.3.0`（Phase J・K・ツールバー修正を含む）。
