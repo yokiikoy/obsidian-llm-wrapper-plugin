@@ -1,5 +1,6 @@
 import type { TFile } from "obsidian";
 import type { AIChatSettings } from "../settings";
+import type { TokenLimitChoice } from "../token-limit-modal";
 import {
   createLlmClient,
   estimatePromptTokens,
@@ -15,8 +16,6 @@ import {
 } from "./llm";
 
 export type CreateLlmClientFn = (creds: LlmCredentials) => LlmClient;
-
-import type { TokenLimitChoice } from "../token-limit-modal";
 
 export interface VaultAdapter {
   resolveFile(path: string): TFile | null;
@@ -42,6 +41,11 @@ export interface ChatSessionDelegate {
   onTurnRolledBack(): void;
   onLoadingChanged(loading: boolean): void;
   onMessagesChanged(): void;
+  /**
+   * Fired after `ChatSession` clears in-memory state. Today only `AIChatView.onClearSession`
+   * calls `clearSession` and updates the DOM itself; if another caller invokes `clearSession`
+   * later, that path must refresh target UI and history to match.
+   */
   onSessionCleared(): void;
   promptTokenLimitChoice(estimated: number, limit: number): Promise<TokenLimitChoice>;
   showNotice(message: string): void;

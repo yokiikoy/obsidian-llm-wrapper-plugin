@@ -39,7 +39,7 @@ export interface UiMessage {
   content: string;
 }
 
-function createVaultAdapter(app: App, getEnabled: () => boolean): VaultAdapter {
+function createVaultAdapter(app: App): VaultAdapter {
   return {
     resolveFile(path: string): TFile | null {
       const abs = app.vault.getAbstractFileByPath(path);
@@ -122,11 +122,7 @@ export class AIChatView extends ItemView implements ChatSessionDelegate {
 
   async onOpen(): Promise<void> {
     this.mdRoot.load();
-    this.session = new ChatSession(
-      createVaultAdapter(this.app, () => this.plugin.settings.enableWikilinkContextResolution),
-      this,
-      () => this.plugin.settings
-    );
+    this.session = new ChatSession(createVaultAdapter(this.app), this, () => this.plugin.settings);
 
     const root = this.contentEl.createDiv({ cls: "ai-chat-root" });
 
@@ -277,7 +273,6 @@ export class AIChatView extends ItemView implements ChatSessionDelegate {
   }
 
   private onClearSession(): void {
-    this.session.stop();
     this.removePendingStreamRows();
     this.session.clearSession();
     this.targetSelectEl.value = "";

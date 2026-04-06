@@ -124,7 +124,7 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 
 ### 5.6 セッション層（[`src/core/chat-session.ts`](../src/core/chat-session.ts)）
 
-- **`ChatSession`:** 会話履歴（`ChatMessage[]`）、`lockedTarget`（`TFile | null`）、送信中フラグ（`_inFlight`）、`AbortController` を保持する。**送信・トークン判定・LLM `stream`・Vault 追記**はここで行う。`VaultAdapter`（`resolveFile` / `appendToFile` / `buildWikilinkContext`）を**注入**し、本番は View 内の `createVaultAdapter(app, …)` が `App` を束ねる。
+- **`ChatSession`:** 会話履歴（`ChatMessage[]`）、`lockedTarget`（`TFile | null`）、送信中フラグ（`_inFlight`）、`AbortController` を保持する。**送信・トークン判定・LLM `stream`・Vault 追記**はここで行う。`VaultAdapter`（`resolveFile` / `appendToFile` / `buildWikilinkContext`）を**注入**し、本番は View 内の `createVaultAdapter(app)` が `App` を束ねる（wikilink の on/off は `ChatSession` が `buildWikilinkContext` に渡す `enabled` で制御）。
 - **`ChatSessionDelegate`:** UI 更新用コールバック。`onSendStarting` で仮 DOM 行、`onStreamChunk` でプレーン累積、**ストリーム完了後・追記前**に `onStreamFinished`（アシスタントの Markdown 確定描画）、追記成功後に `onTurnComplete`（usage 行・入力クリア）、失敗・中止時に `onTurnRolledBack`、読み込み表示に `onLoadingChanged`、Truncate 後に `onMessagesChanged`、セッションクリア時に `onSessionCleared`、トークン超過時に `promptTokenLimitChoice`（Modal）、Notice に `showNotice`。
 - **単一の状態源:** 履歴とロックは **`ChatSession` のみ**が保持し、View は `session.messages` / `session.lockedTarget` / `session.inFlight` を参照する。
 
