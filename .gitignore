@@ -3,5 +3,11 @@ main.js
 main.js.map
 .DS_Store
 
+# GitNexus local code-intelligence index
+.gitnexus/
+
+# Claude Code skills dropped by `gitnexus analyze` (regenerate locally if needed)
+.claude/
+
 # Obsidian plugin runtime data (may contain API keys)
 data.json
