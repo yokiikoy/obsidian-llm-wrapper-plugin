@@ -9,14 +9,21 @@
 | 項目 | 値 |
 |------|-----|
 | バージョン | **1.2.0**（`manifest.json` / `package.json` と一致） |
-| 直近の主な変更 | トークンベース送信前チェック、`TokenLimitModal`、画面上の **推定プロンプトトークン表示**（`view.ts` の `ai-chat-token-estimate`） |
+| 直近の主な変更 | **v1.2.0:** トークンベース送信前チェック、`TokenLimitModal`、**推定プロンプトトークン**（`ai-chat-token-estimate`）。**リファクタ:** 送信・履歴・追記は [`src/core/chat-session.ts`](../src/core/chat-session.ts) に集約（挙動は SPEC と同一を意図。詳細は §5.6） |
+
+---
+
+## アーキテクチャメモ（短く）
+
+- **`ChatSession`** が `messages` / `lockedTarget` / ストリーム・`VaultAdapter` 経由の追記を保持。View は DOM と `ChatSessionDelegate` の実装のみ。
+- 分離の実装コミット例: `fff7e5d`（履歴は `git log` で確認）。
 
 ---
 
 ## 読む順（トークン節約）
 
 1. **このファイル**（本書）— 1 通で足りる想定  
-2. 仕様の詳細が必要なときだけ **[`docs/SPEC.md`](SPEC.md)** の該当節（§5 LLM、§6 View）  
+2. 仕様の詳細が必要なときだけ **[`docs/SPEC.md`](SPEC.md)** の該当節（§5 LLM、**§5.6 セッション層**、§6 View）  
 3. レビュー観点の一覧は **[`docs/REPORT_REVIEW_HANDOFF.md`](REPORT_REVIEW_HANDOFF.md)**（長いので必要時のみ）
 
 **避ける:** リポジトリ全体の貼り付け、過去チャットログの丸ごと再掲。変更は **grep / 該当ファイルのみ読込** で十分なことが多い。
@@ -27,9 +34,10 @@
 
 | 領域 | パス |
 |------|------|
-| 送信・UI・トークン表示・Modal 呼び出し | `src/view.ts` |
+| UI・ショートカット・推定表示・delegate | `src/view.ts` |
+| セッション・送信・トークン判定・ストリーム・追記（`VaultAdapter`） | `src/core/chat-session.ts` |
 | 上限 Modal | `src/token-limit-modal.ts` |
-| トークン推計・上限定数・ストリーム | `src/core/llm.ts` |
+| トークン推計・上限定数・`LlmClient` ストリーム | `src/core/llm.ts` |
 | ウィキリンク追記 | `src/core/wikilink-context.ts` |
 | 設定 | `src/settings.ts` |
 | 仕様の正 | `docs/SPEC.md` |
@@ -62,4 +70,4 @@ npm test && npm run build && npx tsc --noEmit
 
 ---
 
-*このファイルは v1.2.0 リリース時点で作成。以降の変更はコミット履歴と SPEC を正とする。*
+*初版は v1.2.0 リリース時点。`ChatSession` 分離以降も、コミット履歴と [`docs/SPEC.md`](SPEC.md) を正とする。*

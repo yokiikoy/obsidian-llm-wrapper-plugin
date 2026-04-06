@@ -20,10 +20,10 @@
 | ノート追記        | ロックしたノート末尾へ `### User` / `### Assistant` 形式で追記。**追記成功後のみ**会話履歴（`messages`）を更新 |
 | エディタ選択       | ロックノートを開いた状態で選択範囲があると、ユーザーターンにコンテキストとして付与                                     |
 | Wikilink（任意） | 設定でオン時のみ、メッセージ内の `[[リンク]]` を **深さ 1** で解決し本文をプロンプトに連結（上限・切り捨てあり）              |
-| API 履歴       | 送信ペイロードは直近の user/assistant のみ（スライディング・ウィンドウ）。UI とノートは全ターン保持                   |
+| API 履歴       | 送信ペイロードは **トークン上限内**で組み立て、`trimLeadingAssistantRun` で先頭の連続 `assistant` を除去（**件数 10 のサイレント切り捨ては廃止**）。UI とノートはターン単位で全履歴を保持 |
 
 
-詳細な挙動は `**[docs/SPEC.md](docs/SPEC.md)`** を正とする。
+詳細な挙動は [`docs/SPEC.md`](docs/SPEC.md) を正とする。
 
 ---
 
@@ -88,6 +88,8 @@ npm run build
 | 文書                                   | 内容                                                      |
 | ------------------------------------ | ------------------------------------------------------- |
 | `[docs/SPEC.md](docs/SPEC.md)`       | 実装仕様（動作の正）                                              |
+| `[docs/AGENT_HANDOFF.md](docs/AGENT_HANDOFF.md)` | 次エージェント向け短い引き継ぎ（ソース地図） |
+| `[docs/TEST_SPEC.md](docs/TEST_SPEC.md)` | Vitest 単体テストの意図 |
 | `[docs/GITFLOW.md](docs/GITFLOW.md)` | ブランチ運用（`main` / `develop` / feature / release / hotfix） |
 | `[docs/decisions/](docs/decisions/)` | ADR（意思決定の記録）                                            |
 | `[DISCUSSION.md](DISCUSSION.md)`     | 議論・経緯のメモ                                                |

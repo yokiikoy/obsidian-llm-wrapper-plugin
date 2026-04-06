@@ -25,7 +25,8 @@
 | パス                                                                | 役割                                                 |
 | ----------------------------------------------------------------- | -------------------------------------------------- |
 | [`src/main.ts`](../src/main.ts)                                   | プラグイン読み込み、View 登録、コマンド／リボン                         |
-| [`src/view.ts`](../src/view.ts)                                   | `ItemView`：UI、送信、`Scope` ショートカット、トークン表示、Modal 呼び出し |
+| [`src/view.ts`](../src/view.ts)                                   | `ItemView`：DOM・`Scope` ショートカット・推定トークン表示・Modal 呼び出し・`ChatSessionDelegate` 実装 |
+| [`src/core/chat-session.ts`](../src/core/chat-session.ts)         | `ChatSession`：送信・トークン判定・ストリーム・履歴・`VaultAdapter` 経由の追記 |
 | [`src/token-limit-modal.ts`](../src/token-limit-modal.ts)         | コンテキスト上限超過時の **Modal**（Truncate / Clear / Cancel）  |
 | [`src/core/llm.ts`](../src/core/llm.ts)                           | SSE ストリーム、トークン推計、安全上限定数、`trimLeadingAssistantRun`  |
 | [`src/core/wikilink-context.ts`](../src/core/wikilink-context.ts) | オプションの `[[wikilink]]` 深さ1解決                        |
@@ -34,7 +35,7 @@
 | [`docs/SPEC.md`](SPEC.md)                                         | **実装仕様書**（挙動の正）                                    |
 
 
-**テスト対象外（意図的）:** `view.ts`、Modal、Obsidian API 直結は **Vitest 未カバー**（手動・E2E 想定）。
+**テスト:** [`src/core/chat-session.test.ts`](../src/core/chat-session.test.ts) がセッション経路の主要パスを **Vitest でカバー**。一方、`view.ts`・Modal・Obsidian API 直結は **引き続き Vitest 外**（手動・E2E 想定）。
 
 ---
 
@@ -70,7 +71,7 @@
 - 行文言例: `Estimated prompt: ~N / L tokens`（L は上記安全上限）。
 - **入力欄に下書きがあるとき**は仮の `user` として加算し、**(incl. draft input)** を表示。
 - **wikilink 解決で付く追記本文は表示用推計に含めない**（送信時の `userContent` とは差がありうる）。
-- 入力は **200ms デバウンス**で更新。`renderAllMessages` 後・`dispatchStream` の `finally` でも更新。
+- 入力は **200ms デバウンス**で更新。履歴再描画は `renderAllMessages` 末尾で `refreshTokenEstimate`。ストリーム終了後は **`onLoadingChanged(false)`**（[`src/view.ts`](../src/view.ts)）でも `refreshTokenEstimate` を呼ぶ（`dispatchStream` の `finally` に寄せていない）。
 
 ---
 
@@ -87,12 +88,12 @@
 
 | コマンド               | 内容                          |
 | ------------------ | --------------------------- |
-| `npm test`         | Vitest：`src/core/*.test.ts` |
+| `npm test`         | Vitest：`src/core/*.test.ts`（`chat-session.test.ts` 含む） |
 | `npm run build`    | `main.js` 生成                |
 | `npx tsc --noEmit` | 型チェック（`skipLibCheck: true`） |
 
 
-**カバー例:** `estimateTokens` / `estimatePromptTokens` / `trimLeadingAssistantRun` / `limitChatMessagesForApiWindow` / `isAbortError`、ストリーム（`fetch` モック）、`extractWikilinkLinkpaths`。
+**カバー例:** 上記に加え `ChatSession` の送信・Modal 分岐・ストリーム完了（モック delegate）。そのほか `estimateTokens` / `estimatePromptTokens` / `trimLeadingAssistantRun` / `limitChatMessagesForApiWindow` / `isAbortError`、ストリーム（`fetch` モック）、`extractWikilinkLinkpaths`。
 
 ---
 
@@ -110,7 +111,7 @@
 ## 7. 既知の制限（要約）
 
 - トークン数は**推定**であり、請求・厳密制限には使えない。
-- View / Modal は自動テストなし。
+- `view.ts` / Modal は自動テストなし（`chat-session` は上記テストで主要パスをカバー）。
 - 詳細は [`docs/SPEC.md`](SPEC.md) §5.5・§6.7、および [`docs/REPORT_TOKEN_CONTEXT.md`](REPORT_TOKEN_CONTEXT.md)（トークン機能の実装レポート）。
 
 ---
