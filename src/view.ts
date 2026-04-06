@@ -23,6 +23,7 @@ import {
   wikilinkContextOptionsFromSettings,
 } from "./core/wikilink-context";
 import { openTokenLimitModal } from "./token-limit-modal";
+import { openWebSearchConfirmModal } from "./web-search-confirm-modal";
 
 export const VIEW_TYPE = "obsidian-ai-chat-view";
 
@@ -458,9 +459,7 @@ export class AIChatView extends ItemView implements ChatSessionDelegate {
     const rawInput = this.inputEl.value.trim();
     if (!rawInput) return;
     if (this.plugin.settings.provider === "gemini" && this.plugin.settings.enableWebSearch) {
-      const ok = window.confirm(
-        "Web Search is enabled. The model may call Google Search for this request. Continue?"
-      );
+      const ok = await openWebSearchConfirmModal(this.app);
       if (!ok) return;
     }
 

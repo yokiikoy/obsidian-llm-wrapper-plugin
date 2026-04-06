@@ -30,7 +30,8 @@ export default class AIChatPlugin extends Plugin {
     const loaded = (await this.loadData()) as Partial<AIChatSettings> | null;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, loaded ?? {});
     let migrated = false;
-    const loadedGemini = loaded?.geminiModel;
+    // 旧保存データは GeminiModelId 以外の文字列の可能性があるため string として扱う
+    const loadedGemini = loaded?.geminiModel as string | undefined;
     if (
       typeof loadedGemini === "string" &&
       loadedGemini !== "gemini-2.5-flash" &&

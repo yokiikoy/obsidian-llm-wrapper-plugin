@@ -202,17 +202,36 @@
 | ファイル                       | おおよそのテスト数 | 主題                      |
 | -------------------------- | --------- | ----------------------- |
 | `llm.test.ts`              | 12        | メッセージ窓 + Abort 判定       |
-| `llm.stream.test.ts`       | 8         | `createLlmClient` ストリーム |
+| `llm.stream.test.ts`       | 9         | `createLlmClient` ストリーム |
 | `wikilink-context.test.ts` | 5         | ウィキリンク抽出                |
-| `chat-session.test.ts`     | 6         | `ChatSession` + Vault モック（`url-fetch` はモック） |
+| `chat-session.test.ts`     | 8         | `ChatSession` + Vault モック（`url-fetch` はモック） |
 | `note-conversation-parser.test.ts` | 3 | 見出しパース |
 | `url-fetch.test.ts`        | 2         | `extractUrls` |
-| **合計**                     | **36**    | —                       |
+| **合計**                     | **39**    | —                       |
 
 
 ---
 
-## 9. 純粋性・依存の監視（GitNexus 等）
+## 9. Android 手動検証（Vitest 外）
+
+単体テストでは Obsidian ランタイムやモバイル UI を再現しない。Android 版 Obsidian でプラグインを手動サイドロードしたうえで、以下を確認する（[README の Android 節](../README.md) 参照）。
+
+| ID | 確認項目 | 期待 |
+| -- | -------- | ---- |
+| A1 | プラグイン有効化後に **Open AI Chat** でビューが開く | エラーなし |
+| A2 | **Send** でメッセージ送信（キーボードショートカットに依存しない） | ストリーム表示・ノート追記 |
+| A3 | **Stop** でストリーム中止 | 仮行ロールバック、Notice なし |
+| A4 | **URL Fetch** ON で URL を含む入力を送信 | フェッチ Notice / 本文連結 |
+| A5 | **URL Fetch** OFF | `fetchUrlsAppendix` 相当の挙動なし（本文に URL 追記ブロックなし） |
+| A6 | Gemini + **Web Search** ON で送信 | **Modal** で確認（Continue / Cancel）。Cancel で送信されない |
+| A7 | DeepSeek 選択時、**Web Search** トグル | 無効化（disabled） |
+| A8 | **Load note**（ロック済みノート） | 再水和成功またはトークン拒否メッセージ |
+| A9 | **Gemini** / **AI Studio** / **Usage** ボタン | 外部が開く、または OS により挙動差（README 注記） |
+| A10 | 狭い画面幅 | ツールバーが折り返し、横スクロールで全体が破綻しない |
+
+---
+
+## 10. 純粋性・依存の監視（GitNexus 等）
 
 計画上のチェックとして以下を推奨する。
 
@@ -222,7 +241,7 @@
 
 ---
 
-## 10. 変更履歴（メンテ用）
+## 11. 変更履歴（メンテ用）
 
 
 | 日付         | 内容                                             |
@@ -231,5 +250,7 @@
 | 2026-04-06 | `chat-session.test.ts` と件数サマリ（計 28）を追記 |
 | 2026-04-06 | CS4–CS6（Truncate / append 失敗 / ファイル消失）と件数サマリ（計 31）を追記 |
 | 2026-04-06 | `note-conversation-parser` / `url-fetch`（extractUrls）と件数サマリ（計 36）を追記 |
+| 2026-04-06 | §9 Android 手動検証チェックリストを追加（セクション番号繰り下げ） |
+| 2026-04-06 | 件数サマリを Vitest 実数（計 39）に合わせて更新 |
 
 

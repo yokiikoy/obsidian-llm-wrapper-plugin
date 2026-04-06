@@ -58,6 +58,18 @@ npm run build
 
 開発時は `npm run dev` でウォッチビルドできます（`[esbuild.config.mjs](esbuild.config.mjs)`）。
 
+### Android（手動サイドロード）
+
+PC で `npm run build` し、生成物を Vault にコピーするのが確実です。
+
+1. ビルド成果物を用意する: `main.js`, `manifest.json`, `styles.css`（リポジトリルートまたはビルド後の出力）。
+2. Android 端末で Obsidian の Vault を同期するか、ファイルマネージャーで Vault フォルダにアクセスできるようにする。
+3. Vault 内の **`/.obsidian/plugins/obsidian-ai-chat/`** に上記3ファイルを置く（フォルダ名はプラグイン ID と一致）。
+4. Obsidian を再起動するか、**設定 → コミュニティプラグイン**でプラグインを一度オフにしてから再度オンにする。
+5. 更新時は同じ3ファイルを上書きし、手順4を繰り返す。
+
+**メモ:** リポジトリの `.gitignore` により `main.js` がコミットに含まれない場合は、必ずローカルで `npm run build` してからコピーしてください。Android ではキーボードショートカット（Ctrl/Cmd+Enter）が使えない場合があるため、**Send ボタン**で送信してください。Web Search 送信前の確認は **`window.confirm` ではなく Obsidian のモーダル**で行います（モバイル WebView でも安定しやすい）。Gemini / AI Studio / Usage などの外部リンクは `window.open` で開きます。ブラウザが起動しない場合は OS の設定や Obsidian の権限を確認してください。
+
 ---
 
 ## 使い方（かんたん）

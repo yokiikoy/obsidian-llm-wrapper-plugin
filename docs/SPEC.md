@@ -4,7 +4,7 @@
 
 - **プラグイン ID:** `obsidian-ai-chat`（[`manifest.json`](../manifest.json)）
 - **バージョン:** `manifest.json` の `version` に従う（現行: `1.2.0`）
-- **主要ソース:** [`src/main.ts`](../src/main.ts), [`src/view.ts`](../src/view.ts), [`src/core/chat-session.ts`](../src/core/chat-session.ts), [`src/token-limit-modal.ts`](../src/token-limit-modal.ts), [`src/settings.ts`](../src/settings.ts), [`src/core/llm.ts`](../src/core/llm.ts)
+- **主要ソース:** [`src/main.ts`](../src/main.ts), [`src/view.ts`](../src/view.ts), [`src/core/chat-session.ts`](../src/core/chat-session.ts), [`src/token-limit-modal.ts`](../src/token-limit-modal.ts), [`src/web-search-confirm-modal.ts`](../src/web-search-confirm-modal.ts), [`src/settings.ts`](../src/settings.ts), [`src/core/llm.ts`](../src/core/llm.ts)
 
 ---
 
@@ -225,7 +225,9 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 
 ### 6.7 送信フロー（View `onSend` → `ChatSession.send`）
 
-View 側の前提（ターゲット未ロックならロック、選択コンテキスト取得）のあと **`session.send(rawInput, selection)`** が以下を実行する。
+View の `onSend` は、入力が空でなく送信中でないことを確認したうえで、**Gemini かつ `enableWebSearch` が真**のとき **`openWebSearchConfirmModal`**（Obsidian `Modal`、[`src/web-search-confirm-modal.ts`](../src/web-search-confirm-modal.ts)）で継続を確認する。**Cancel** なら送信を中断する（`window.confirm` は使わない。モバイル WebView でも安定しやすいため）。
+
+その後、ターゲット未ロックならロック、選択コンテキスト取得のあと **`session.send(rawInput, selection)`** が以下を実行する。
 
 1. **URL 取り込み（§5.7）** — `rawInput` に対し `fetchUrlsAppendix`（進捗は `showNotice`）。続いて `baseUserTurn` = `buildUserTurnBody(rawInputWithUrls, selection)`。設定がオンなら `VaultAdapter.buildWikilinkContext`（**元の** `rawInput`）で付加し、これを `userContent` とする。
 2. `fullTurns` = 既存 `session.messages` を `ChatMessage[]` に写したもの + 今ターンの `{ role: "user", content: userContent }`。
