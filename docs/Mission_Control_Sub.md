@@ -1,5 +1,5 @@
 # 🚀 Mission Control: Obsidian AI Chat
-> **Status:** Phase D–J Implemented (2026-04-06)
+> **Status:** Phase D–K Implemented (2026-04-06)
 > **Role:** Intelligent Hub (Process Layer of Yuichi's Ecosystem)
 
 ## 🎯 Active Missions
@@ -9,6 +9,7 @@
 - [x] **Phase H:** Repository-managed Mission Docs (feature/phase-h-repo-managed-missions)
 - [x] **Phase I:** Chat Toolbar Overhaul (feature/phase-i-toolbar-overhaul)
 - [x] **Phase J:** Mobile Android Support (feature/phase-j-mobile-android)
+- [x] **Phase K:** Message Timestamps — UI + Vault (feature/phase-k-message-timestamps)
 
 ## 📊 Project Roadmap
 1. **Phase 0: Refactoring** (Done) - ChatSessionへの分離、テスト基盤構築。
@@ -18,6 +19,7 @@
 5. **Phase H: Mission 文書の Git 管理** (Done) - `docs/missions` 正本・Vault symlink・運用ルール（`README`）。
 6. **Phase I: ツールバー再設計** (Done) - モデル統合、Web Search / URL Fetch トグル、外部リンク導線。
 7. **Phase J: Android モバイル対応** (Done) - 手動サイドロード手順、Web Search 確認 Modal 化、狭幅 CSS、手動検証リスト。
+8. **Phase K: メッセージ時刻** (Done) - `createdAt`、Vault `<!-- ai-chat-at -->`、チャット UI 時刻行、ADR 0003、API は本文のみ。
 
 ## 📈 Billing & Resources
 - **Budget Limit:** ¥5,000 / month
@@ -40,3 +42,4 @@
 - 2026-04-06T18:45:16+09:00: Phase I 実装を完了。Active/Roadmap を Done 化し、Web Search・URL Fetch トグルと統合モデル選択を反映。
 - 2026-04-06T18:52:10+09:00: Web Search ON + Gemini 送信時に毎回確認ダイアログ（confirm）を追加。Cancel 時は送信中止。
 - 2026-04-06T19:09:01+09:00: Phase J 完了。Android 手動導入、`openWebSearchConfirmModal`（Modal）へ置換、狭幅 CSS、`TEST_SPEC` 手動検証（A1–A10）。`Mission_Phase_J_Mobile_Android` を追加。
+- 2026-04-06T20:14:30+09:00: Phase K 完了（後追い Mission 化）。メッセージ時刻（UI + Vault）、ADR 0003、コミット `1c69ddf` / `e06fa67`。`Mission_Phase_K_Message_Timestamps` を追加。
