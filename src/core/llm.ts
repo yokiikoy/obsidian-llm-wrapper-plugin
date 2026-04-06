@@ -22,6 +22,30 @@ export interface LlmCredentials {
   geminiApiKey: string;
 }
 
+/**
+ * Max `user` / `assistant` messages per API request (sliding window on the payload only).
+ * System instructions use `ChatOptions.systemPrompt` and are not part of this array.
+ */
+export const DEFAULT_MAX_API_HISTORY_MESSAGES = 10;
+
+/**
+ * Keeps the last `maxCount` chat messages for the API. Trims a leading `assistant` run so
+ * the window does not start mid-turn when possible. Does not inject `system` (handled in options).
+ */
+export function limitChatMessagesForApiWindow(
+  messages: ChatMessage[],
+  maxCount: number = DEFAULT_MAX_API_HISTORY_MESSAGES
+): ChatMessage[] {
+  if (maxCount < 1) return [];
+  if (messages.length <= maxCount) return messages.slice();
+  const sliced = messages.slice(-maxCount);
+  let start = 0;
+  while (start < sliced.length && sliced[start].role === "assistant") {
+    start += 1;
+  }
+  return sliced.slice(start);
+}
+
 const DEEPSEEK_URL = "https://api.deepseek.com/chat/completions";
 const GEMINI_MODEL = "gemini-1.5-flash";
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;

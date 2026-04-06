@@ -8,7 +8,12 @@ import {
   WorkspaceLeaf,
 } from "obsidian";
 import type AIChatPlugin from "./main";
-import { createLlmClient, type ChatMessage } from "./core/llm";
+import {
+  createLlmClient,
+  DEFAULT_MAX_API_HISTORY_MESSAGES,
+  limitChatMessagesForApiWindow,
+  type ChatMessage,
+} from "./core/llm";
 
 export const VIEW_TYPE = "obsidian-ai-chat-view";
 
@@ -172,9 +177,9 @@ export class AIChatView extends ItemView {
   }
 
   private formatNoteBlock(userContent: string, assistantContent: string): string {
-    return (
-      `\n\n### User\n\n${userContent}\n\n### Assistant\n\n${assistantContent}\n`
-    );
+    const leadingSep = "\n\n";
+    const body = `### User\n\n${userContent}\n\n### Assistant\n\n${assistantContent}\n`;
+    return `${leadingSep}${body}`;
   }
 
   private async appendToLockedNote(userContent: string, assistantContent: string): Promise<void> {
@@ -217,10 +222,14 @@ export class AIChatView extends ItemView {
       geminiApiKey: this.plugin.settings.geminiApiKey,
     });
 
-    const apiPayload: ChatMessage[] = [
+    const fullTurns: ChatMessage[] = [
       ...this.toApiMessages(),
       { role: "user", content: userContent },
     ];
+    const apiPayload = limitChatMessagesForApiWindow(
+      fullTurns,
+      DEFAULT_MAX_API_HISTORY_MESSAGES
+    );
 
     this.setLoading(true);
     try {
@@ -229,13 +238,13 @@ export class AIChatView extends ItemView {
         systemPrompt: this.plugin.settings.systemPrompt,
       });
 
+      await this.appendToLockedNote(userContent, reply);
+
       this.messages.push({ role: "user", content: userContent });
       await this.appendRenderedMessage(this.messages[this.messages.length - 1]);
 
       this.messages.push({ role: "assistant", content: reply });
       await this.appendRenderedMessage(this.messages[this.messages.length - 1]);
-
-      await this.appendToLockedNote(userContent, reply);
 
       this.inputEl.value = "";
     } catch (e) {
