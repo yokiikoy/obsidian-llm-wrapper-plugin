@@ -277,5 +277,6 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 | 2026-04-06 | 初版: 現行実装に基づき記述 | `41c62d1b…`（初期コミット） |
 | 2026-04-06 | 追記: API スライディング・ウィンドウ、`onSend` のノート先行成功後のみ UI 更新、`formatNoteBlock` 先頭 `\n\n` 明示 | `97ac5f8b…` |
 | 2026-04-06 | yokii-dev-workflow 遵守用: `docs/RECORDS.md`、`docs/decisions/`（ADR 0001）、`DISCUSSION.md`、`EVAL.md` | （本変更のコミット SHA を追記） |
+| 2026-04-06 | Phase A: `LlmClient.stream`（DeepSeek/Gemini SSE）、Stop / `AbortController`、プレーン→Markdown 確定描画、追記成功後のみ `messages` 確定、usage 行 | `00eb3f85bb4beceaedf5e034a2d5b33850c48043` |
 
 記録運用は [`docs/RECORDS.md`](RECORDS.md) を参照。
