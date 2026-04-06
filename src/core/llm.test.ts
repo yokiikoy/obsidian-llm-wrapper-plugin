@@ -1,5 +1,51 @@
 import { describe, expect, it } from "vitest";
-import { isAbortError, limitChatMessagesForApiWindow, type ChatMessage } from "./llm";
+import {
+  estimatePromptTokens,
+  estimateTokens,
+  isAbortError,
+  limitChatMessagesForApiWindow,
+  trimLeadingAssistantRun,
+  type ChatMessage,
+  type ChatOptions,
+} from "./llm";
+
+describe("estimateTokens", () => {
+  it("uses ceil of length * 1.1", () => {
+    expect(estimateTokens("")).toBe(0);
+    expect(estimateTokens("a")).toBe(2);
+    expect(estimateTokens("hello")).toBe(6);
+  });
+});
+
+describe("estimatePromptTokens", () => {
+  const opts: ChatOptions = { temperature: 0, systemPrompt: "sys" };
+  it("sums system and body message contents", () => {
+    const msgs: ChatMessage[] = [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "yo" },
+    ];
+    const sysTok = estimateTokens("sys");
+    const uTok = estimateTokens("hi");
+    const aTok = estimateTokens("yo");
+    expect(estimatePromptTokens(msgs, opts, "deepseek")).toBe(sysTok + uTok + aTok);
+  });
+});
+
+describe("trimLeadingAssistantRun", () => {
+  const u = (content: string): ChatMessage => ({ role: "user", content });
+  const a = (content: string): ChatMessage => ({ role: "assistant", content });
+
+  it("removes leading assistants only", () => {
+    expect(trimLeadingAssistantRun([a("1"), a("2"), u("3")])).toEqual([u("3")]);
+  });
+
+  it("returns copy when no leading assistant", () => {
+    const m = [u("1"), a("2")];
+    const out = trimLeadingAssistantRun(m);
+    expect(out).toEqual(m);
+    expect(out).not.toBe(m);
+  });
+});
 
 describe("limitChatMessagesForApiWindow", () => {
   const u = (content: string): ChatMessage => ({ role: "user", content });

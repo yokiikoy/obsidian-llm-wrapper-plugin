@@ -12,15 +12,20 @@ import {
 import type AIChatPlugin from "./main";
 import {
   createLlmClient,
-  DEFAULT_MAX_API_HISTORY_MESSAGES,
+  estimatePromptTokens,
+  getInputTokenLimitForProvider,
   isAbortError,
-  limitChatMessagesForApiWindow,
+  trimLeadingAssistantRun,
   type ChatMessage,
+  type ChatOptions,
+  type LlmClient,
+  type LlmProviderId,
 } from "./core/llm";
 import {
   buildWikilinkContextAppendix,
   wikilinkContextOptionsFromSettings,
 } from "./core/wikilink-context";
+import { openTokenLimitModal } from "./token-limit-modal";
 
 export const VIEW_TYPE = "obsidian-ai-chat-view";
 
@@ -49,6 +54,8 @@ export class AIChatView extends ItemView {
   private loadingEl!: HTMLSpanElement;
   private targetEl!: HTMLSpanElement;
   private targetSelectEl!: HTMLSelectElement;
+  private tokenEstimateEl!: HTMLSpanElement;
+  private tokenEstimateDebounce: ReturnType<typeof setTimeout> | undefined;
 
   /** In-memory transcript; not synced from manual note edits (MVP). */
   messages: UiMessage[] = [];
@@ -103,11 +110,16 @@ export class AIChatView extends ItemView {
     this.targetSelectEl.addEventListener("change", () => this.refreshTargetLabel());
     const detailRow = targetBlock.createDiv({ cls: "ai-chat-target-detail" });
     this.targetEl = detailRow.createSpan();
+    const tokenRow = targetBlock.createDiv({ cls: "ai-chat-token-estimate" });
+    this.tokenEstimateEl = tokenRow.createSpan();
 
     this.historyEl = root.createDiv({ cls: "ai-chat-history" });
 
     const inputRow = root.createDiv({ cls: "ai-chat-input-row" });
     this.inputEl = inputRow.createEl("textarea", { cls: "ai-chat-input" });
+    this.registerDomEvent(this.inputEl, "input", () => this.scheduleTokenEstimate(), {
+      passive: true,
+    });
 
     const toolbar = root.createDiv({ cls: "ai-chat-toolbar" });
     this.sendBtn = toolbar.createEl("button", { text: "Send", cls: "mod-cta" });
@@ -198,6 +210,42 @@ export class AIChatView extends ItemView {
     for (const m of this.messages) {
       await this.appendRenderedMessage(m);
     }
+    this.refreshTokenEstimate();
+  }
+
+  private chatOptionsForEstimate(): ChatOptions {
+    return {
+      temperature: this.plugin.settings.temperature,
+      systemPrompt: this.plugin.settings.systemPrompt,
+    };
+  }
+
+  /** Estimated prompt tokens: session history + system, and current input draft when non-empty (wikilink appendix not included). */
+  private refreshTokenEstimate(): void {
+    if (!this.tokenEstimateEl) return;
+    const provider = this.plugin.settings.provider as LlmProviderId;
+    const opts = this.chatOptionsForEstimate();
+    const raw = this.inputEl?.value?.trim() ?? "";
+    let msgs: ChatMessage[] = this.toApiMessages();
+    if (raw) {
+      msgs = [...msgs, { role: "user", content: raw }];
+    }
+    const n = estimatePromptTokens(msgs, opts, provider);
+    const limit = getInputTokenLimitForProvider(provider);
+    const draftHint = raw ? " (incl. draft input)" : "";
+    this.tokenEstimateEl.setText(
+      `Estimated prompt: ~${n.toLocaleString()} / ${limit.toLocaleString()} tokens${draftHint}`
+    );
+  }
+
+  private scheduleTokenEstimate(): void {
+    if (this.tokenEstimateDebounce !== undefined) {
+      clearTimeout(this.tokenEstimateDebounce);
+    }
+    this.tokenEstimateDebounce = setTimeout(() => {
+      this.tokenEstimateDebounce = undefined;
+      this.refreshTokenEstimate();
+    }, 200);
   }
 
   private removePendingStreamRows(): void {
@@ -343,15 +391,69 @@ export class AIChatView extends ItemView {
       geminiApiKey: this.plugin.settings.geminiApiKey,
     });
 
-    const fullTurns: ChatMessage[] = [
+    const provider = this.plugin.settings.provider as LlmProviderId;
+    const chatOptions: ChatOptions = {
+      temperature: this.plugin.settings.temperature,
+      systemPrompt: this.plugin.settings.systemPrompt,
+    };
+    const tokenLimit = getInputTokenLimitForProvider(provider);
+
+    let fullTurns: ChatMessage[] = [
       ...this.toApiMessages(),
       { role: "user", content: userContent },
     ];
-    const apiPayload = limitChatMessagesForApiWindow(
-      fullTurns,
-      DEFAULT_MAX_API_HISTORY_MESSAGES
-    );
 
+    for (;;) {
+      let est = estimatePromptTokens(fullTurns, chatOptions, provider);
+      if (est <= tokenLimit) {
+        const apiPayload = trimLeadingAssistantRun(fullTurns);
+        if (apiPayload.length === 0) {
+          new Notice("AI Chat: no valid messages to send after trimming.");
+          return;
+        }
+        await this.dispatchStream(userContent, apiPayload, chatOptions, client);
+        return;
+      }
+
+      const choice = await openTokenLimitModal(this.app, est, tokenLimit);
+      if (choice === "cancel") return;
+
+      if (choice === "clear") {
+        this.messages = [];
+        await this.renderAllMessages();
+        fullTurns = [{ role: "user", content: userContent }];
+        est = estimatePromptTokens(fullTurns, chatOptions, provider);
+        if (est > tokenLimit) {
+          new Notice("AI Chat: message is still too long. Shorten your input.");
+          return;
+        }
+        continue;
+      }
+
+      let candidate = fullTurns.slice();
+      while (
+        candidate.length > 1 &&
+        estimatePromptTokens(candidate, chatOptions, provider) > tokenLimit
+      ) {
+        candidate.shift();
+      }
+      if (estimatePromptTokens(candidate, chatOptions, provider) > tokenLimit) {
+        new Notice("AI Chat: message is still too long. Shorten your input.");
+        return;
+      }
+      const dropped = fullTurns.length - candidate.length;
+      this.messages = this.messages.slice(dropped);
+      await this.renderAllMessages();
+      fullTurns = candidate;
+    }
+  }
+
+  private async dispatchStream(
+    userContent: string,
+    apiPayload: ChatMessage[],
+    chatOptions: ChatOptions,
+    client: LlmClient
+  ): Promise<void> {
     this.abortController = new AbortController();
     const { signal } = this.abortController;
 
@@ -386,26 +488,18 @@ export class AIChatView extends ItemView {
 
     this.setLoading(true);
     try {
-      const result = await client.stream(
-        apiPayload,
-        {
-          temperature: this.plugin.settings.temperature,
-          systemPrompt: this.plugin.settings.systemPrompt,
-        },
-        (textChunk, reasoningChunk) => {
-          if (textChunk) {
-            accText += textChunk;
-            plainLayer.textContent = accText;
-          }
-          if (reasoningChunk) {
-            accReason += reasoningChunk;
-            reasonPlain.textContent = accReason;
-            reasonPlain.style.display = "";
-          }
-          this.scrollHistoryToBottom();
-        },
-        signal
-      );
+      const result = await client.stream(apiPayload, chatOptions, (textChunk, reasoningChunk) => {
+        if (textChunk) {
+          accText += textChunk;
+          plainLayer.textContent = accText;
+        }
+        if (reasoningChunk) {
+          accReason += reasoningChunk;
+          reasonPlain.textContent = accReason;
+          reasonPlain.style.display = "";
+        }
+        this.scrollHistoryToBottom();
+      }, signal);
 
       const mdSource = this.buildAssistantMarkdown(result.content, result.reasoning);
       plainLayer.style.display = "none";
@@ -448,6 +542,7 @@ export class AIChatView extends ItemView {
     } finally {
       this.setLoading(false);
       this.abortController = null;
+      this.refreshTokenEstimate();
     }
   }
 }

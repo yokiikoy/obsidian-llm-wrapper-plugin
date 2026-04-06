@@ -3,8 +3,8 @@
 本書は **リポジトリ内のソースコードが実際にどう動くか** を、実装に忠実に記述する。要件定義書（別紙）との差分があれば、**実装を正**とする。
 
 - **プラグイン ID:** `obsidian-ai-chat`（[`manifest.json`](../manifest.json)）
-- **バージョン:** `manifest.json` の `version` に従う（現行: `1.1.0`）
-- **主要ソース:** [`src/main.ts`](../src/main.ts), [`src/view.ts`](../src/view.ts), [`src/settings.ts`](../src/settings.ts), [`src/core/llm.ts`](../src/core/llm.ts)
+- **バージョン:** `manifest.json` の `version` に従う（現行: `1.2.0`）
+- **主要ソース:** [`src/main.ts`](../src/main.ts), [`src/view.ts`](../src/view.ts), [`src/token-limit-modal.ts`](../src/token-limit-modal.ts), [`src/settings.ts`](../src/settings.ts), [`src/core/llm.ts`](../src/core/llm.ts)
 
 ---
 
@@ -112,13 +112,15 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 
 `createLlmClient(creds)` — `provider` に応じてキー未設定時は `reject`（空キー）。
 
-### 5.5 API 送信用スライディング・ウィンドウ（`limitChatMessagesForApiWindow`）
+### 5.5 トークン推計と API ペイロードの確定
 
-- **目的:** 会話が長いときの API コスト・遅延・コンテキスト上限への対策。`messages` 配列の **末尾だけ** を API に渡す。
-- **定数:** `DEFAULT_MAX_API_HISTORY_MESSAGES = 10`（`user` / `assistant` を合わせて最大 10 件）。
-- **挙動:** `messages.length > maxCount` のとき `messages.slice(-maxCount)`。先頭が連続する `assistant` なら先頭から落とし、**ウィンドウがアシスタントの途中から始まらない**ようにする。
-- **システムプロンプト:** `ChatMessage[]` には含めない。`ChatOptions.systemPrompt` により LLM 層が従来どおり先頭相当の指示としてマージする（DeepSeek は `system` メッセージ、Gemini は `systemInstruction`）。
-- **メモリ・ノート:** View の `messages` とノートへの追記は **全履歴**のまま。制限は **API ペイロードのみ**。
+- **`estimateTokens(text)`:** `Math.ceil(text.length * 1.1)` — 厳密な tokenizer は使わず、マルチバイトを考慮した安全側の粗い見積り。
+- **`estimatePromptTokens(messages, options, provider)`:** `systemPrompt` と `messages` 内の `system` を §5.2 / §5.3 と同様に連結した文字列に `estimateTokens` を適用し、続けて `system` 以外の各 `content` も合算（プロバイダ共通のテキスト量として扱う）。
+- **入力上限（安全圏）:** `getInputTokenLimitForProvider` — **Gemini:** `GEMINI_INPUT_TOKEN_LIMIT_SAFE = 800_000`、**DeepSeek:** `DEEPSEEK_INPUT_TOKEN_LIMIT_SAFE = 100_000`（出力・バッファ分を見込んだプロンプト側の目安）。
+- **`trimLeadingAssistantRun(messages)`:** 先頭の連続する `assistant` をすべて除き、ペイロードが可能な限り `user` から始まるようにする（API の役割順序を満たす）。
+- **View 側の送信前判定:** `fullTurns`（既存履歴 + 今回ユーザーターン）について `estimatePromptTokens` を上限と比較。**超過時**は [`TokenLimitModal`](../src/token-limit-modal.ts) で **Truncate**（先頭から `shift` して上限内へ。`messages` も同件数だけ `slice` し `renderAllMessages` で UI 同期）/ **Clear session 相当**（履歴を空にし今回の入力のみ）/ **Cancel** を選択させる。**上限内**は `trimLeadingAssistantRun(fullTurns)` のみを `stream` に渡す（**件数 10 によるサイレント切り捨ては行わない**）。
+- **レガシー:** `limitChatMessagesForApiWindow`（末尾 `maxCount` 件 + 先頭 `assistant` 除去）はテスト互換のため残すが、**本番の送信経路では使用しない**。
+- **メモリ・ノート:** Truncate 選択後は View の `messages` が短くなるため、**画面と API コンテキストが一致**。ノートへの追記は従来どおりターン単位。
 
 ---
 
@@ -132,7 +134,7 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 
 ### 6.2 DOM 構成（上から順）
 
-1. **Target ブロック**（`ai-chat-target`）— **ノート選択**（`select.ai-chat-target-select`）と **状態行**（`ai-chat-target-detail` 内スパン）。未ロック時は「次の送信でロックする先」を表示、ロック後は追記先パス。
+1. **Target ブロック**（`ai-chat-target`）— **ノート選択**（`select.ai-chat-target-select`）、**状態行**（`ai-chat-target-detail`）、**推定トークン行**（`ai-chat-token-estimate`）— `estimatePromptTokens` により **履歴＋システム**、入力欄に文字があるときは **ドラフトを仮の user メッセージとして加算**（wikilink 追記は含めない）。表示形式: `Estimated prompt: ~N / L tokens`、ドラフトあり時は `(incl. draft input)` を付与。入力は 200ms デバウンスで更新。
 2. **履歴**（`ai-chat-history`）— 縦フレックス。各メッセージは `ai-chat-msg` + ロール修飾子 `ai-chat-msg-user`（右寄せ）または `ai-chat-msg-assistant`（左寄せ）。ロールラベル（`ai-chat-msg-role`）の下に **吹き出し内側** `ai-chat-msg-bubble-inner`（`overflow-x: auto`、`word-break` 系でコードブロック・テーブルが横幅を突き破らない）。確定済み本文は `MarkdownRenderer.render`、ストリーム中のアシスタントのみプレーンテキスト → 完了後に再描画。
 3. **入力**（`textarea.ai-chat-input`）— 複数行。**Ctrl+Enter / Cmd+Enter**（および **Mod+Enter**：macOS では Cmd、それ以外では Ctrl）で送信（通常 Enter は改行）。**IME 変換中**（`isComposing`）は送信しない。Obsidian はキーを DOM のみで拾えないことがあるため、**`View.scope`（`new Scope(this.app.scope)`）に `Scope.register`** で `Mod` / `Ctrl` / `Meta` と `Enter` / `NumpadEnter` を登録し、**フォーカスが入力欄のときだけ** `onSend` する（ハンドラは `false` を返して既定処理を抑止）。
 4. **ツールバー:** **Send**（`mod-cta`）、**Stop**（`mod-warning`、送信中のみ表示）、**Clear session**、**Usage**、読み込み文言 `Waiting for model…`（`ai-chat-loading`）。
@@ -192,14 +194,16 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 - **サイズ:** ノートあたり最大 12 000 文字、追記するコンテキスト全体で最大 40 000 文字（実装定数）。超過分は切り捨て、当該ノート末尾に `> [Truncated due to size limit]` を付与。全体上限超過時は残りリンクをスキップし、スキップ用の切り捨て注記を付与。
 - **ユーザーターン:** `buildUserTurnBody(...)` の結果の後に、`## Resolved wikilink context (depth 1)` 以下へ各ノート本文を連結したブロックを付加する。
 
-### 6.7 送信フロー（`onSend`）
+### 6.7 送信フロー（`onSend`）と `dispatchStream`
 
 前提チェック後のコア順序:
 
 1. `baseUserTurn` = `buildUserTurnBody(rawInput, selection)`。設定がオンなら [`buildWikilinkContextAppendix`](../src/core/wikilink-context.ts) で付加し、これを `userContent` とする。
 2. `fullTurns` = 既存 `messages` を `ChatMessage[]` に写したもの + 今ターンの `{ role: "user", content: userContent }`。
-3. `apiPayload` = `limitChatMessagesForApiWindow(fullTurns, DEFAULT_MAX_API_HISTORY_MESSAGES)`。
-4. ユーザー行を履歴に描画（`MarkdownRenderer`）。アシスタント用プレースホルダ行を追加し `pendingStreamRows` に保持。
+3. **トークン判定（§5.5）:** `estimatePromptTokens(fullTurns, …)` とプロバイダ別上限を比較。
+   - **上限内:** `apiPayload` = `trimLeadingAssistantRun(fullTurns)`。空なら Notice して終了。
+   - **上限超:** `TokenLimitModal`（タイトル **Context Limit Reached**）。**Truncate Old Messages** — `fullTurns` を末尾の今回ユーザーターンを残しつつ先頭から削り、推定が上限内になるまで `shift`。`messages` も削った件数だけ `slice` し `renderAllMessages()`。**Clear Session (New Start)** — `messages` を空にして画面を再描画し、`fullTurns` を今回のユーザーのみにする（まだ超過なら Notice）。**Cancel** — 何も送らず終了（入力は保持）。
+4. 以降は **`dispatchStream`**（`onSend` から分離）: ユーザー行を履歴に描画（`MarkdownRenderer`）。アシスタント用プレースホルダ行を追加し `pendingStreamRows` に保持。
 5. `setLoading(true)` — Send を隠し Stop を表示、`Waiting for model…`。
 6. `AbortController` を生成し `createLlmClient` → `stream(apiPayload, options, onChunk, signal)` を `await`。チャンクごとにアシスタント行のプレーンテキストを更新（`MarkdownRenderer` は呼ばない）。
 7. **正常完了時:** 累積 `StreamResult` で `MarkdownRenderer` を実行し、その後 **`appendToLockedNote(userContent, result.content)` を try。** `append` が失敗した場合は **`removePendingStreamRows()`** で当ターンのユーザ/アシスタント仮行を DOM から削除し、例外を再送出する（ノート・`messages` は未更新のまま）。成功時のみ続行（ノートには **本文のみ**、reasoning は含めない）。
@@ -207,6 +211,8 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 9. **中止（`AbortError`）:** `Notice` なし。`pendingStreamRows` を DOM から削除。ノート・`messages` は変更しない。入力は保持。
 10. **その他の失敗:** `Notice` にエラー文。`pendingStreamRows` を削除。**入力はクリアしない**。
 11. `finally`: `setLoading(false)`、`abortController` を null。
+
+**ショートカット送信:** `View.scope` の Mod/Ctrl/Meta + Enter ハンドラ内で **`evt.isComposing` のときは送信しない**（IME 確定中の Enter を誤爆しない）。
 
 **原子性:** ノート追記に失敗した場合、UI 上の履歴は当ターンを増やさず、**仮 DOM もロールバック**する（ファイル・メモリ・表示の整合）。ストリームは完了していても追記失敗なら `messages` に載せない。
 
@@ -302,5 +308,7 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 | 2026-04-06 | git-flow 採用: [`docs/GITFLOW.md`](GITFLOW.md)、`develop` ブランチ作成、`RECORDS.md` からリンク | `e5bfc50a271ea85f1dcee50130890afd0b3d3623` |
 | 2026-04-06 | Phase C（UI）: ターゲット `<select>`（`mtime` 降順・最新 50 件）、吹き出し左右レイアウト・内側 `overflow-x`/折り返し、Ctrl/Cmd+Enter 送信（`isComposing` ガード） | （未コミット可） |
 | 2026-04-06 | **v1.1.0** 確定: `manifest.json` / `package.json` を `1.1.0` に（Vitest・core テスト、UI 改善、送信は `Scope` 登録） |  |
+| 2026-04-06 | トークンベース・コンテキスト: `estimateTokens` / `estimatePromptTokens`、プロバイダ別安全上限、`trimLeadingAssistantRun`、送信前超過時 `TokenLimitModal`（Truncate / Clear / Cancel）、件数 10 のサイレント切り捨て廃止 |  |
+| 2026-04-06 | **v1.2.0** 確定: 画面上の推定トークン行（`ai-chat-token-estimate`）、レビュー／トークン機能レポート、`docs/AGENT_HANDOFF.md`（次エージェント引き継ぎ） |  |
 
 記録運用は [`docs/RECORDS.md`](RECORDS.md) を参照。

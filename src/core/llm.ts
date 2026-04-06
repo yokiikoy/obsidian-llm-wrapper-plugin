@@ -43,8 +43,55 @@ export interface LlmCredentials {
 /**
  * Max `user` / `assistant` messages per API request (sliding window on the payload only).
  * System instructions use `ChatOptions.systemPrompt` and are not part of this array.
+ * @deprecated Prefer token-based trimming via {@link estimatePromptTokens} / {@link trimLeadingAssistantRun}; kept for tests and callers that still cap by count.
  */
 export const DEFAULT_MAX_API_HISTORY_MESSAGES = 10;
+
+/** Conservative input token budgets (prompt-side safety margin vs raw API max). */
+export const GEMINI_INPUT_TOKEN_LIMIT_SAFE = 800_000;
+export const DEEPSEEK_INPUT_TOKEN_LIMIT_SAFE = 100_000;
+
+export function getInputTokenLimitForProvider(provider: LlmProviderId): number {
+  return provider === "gemini" ? GEMINI_INPUT_TOKEN_LIMIT_SAFE : DEEPSEEK_INPUT_TOKEN_LIMIT_SAFE;
+}
+
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length * 1.1);
+}
+
+/**
+ * Rough prompt-token estimate aligned with how system + body text are assembled for both providers.
+ */
+export function estimatePromptTokens(
+  messages: ChatMessage[],
+  options: ChatOptions,
+  _provider: LlmProviderId
+): number {
+  const systemFromMessages = messages
+    .filter((m) => m.role === "system")
+    .map((m) => m.content)
+    .join("\n\n");
+  const systemText =
+    [options.systemPrompt?.trim(), systemFromMessages].filter(Boolean).join("\n\n") || "";
+  const bodyMessages = messages.filter((m) => m.role !== "system");
+  let total = 0;
+  if (systemText) total += estimateTokens(systemText);
+  for (const m of bodyMessages) {
+    total += estimateTokens(m.content);
+  }
+  return total;
+}
+
+/**
+ * Drops a leading run of `assistant` messages so the payload does not start mid-turn.
+ */
+export function trimLeadingAssistantRun(messages: ChatMessage[]): ChatMessage[] {
+  let start = 0;
+  while (start < messages.length && messages[start].role === "assistant") {
+    start += 1;
+  }
+  return messages.slice(start);
+}
 
 /**
  * Keeps the last `maxCount` chat messages for the API. Trims a leading `assistant` run so
@@ -57,11 +104,7 @@ export function limitChatMessagesForApiWindow(
   if (maxCount < 1) return [];
   if (messages.length <= maxCount) return messages.slice();
   const sliced = messages.slice(-maxCount);
-  let start = 0;
-  while (start < sliced.length && sliced[start].role === "assistant") {
-    start += 1;
-  }
-  return sliced.slice(start);
+  return trimLeadingAssistantRun(sliced);
 }
 
 export function isAbortError(e: unknown): boolean {
