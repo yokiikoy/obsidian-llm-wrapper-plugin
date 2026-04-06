@@ -9,6 +9,7 @@
 | 数値サマリ・評価の約束 | [`EVAL.md`](../EVAL.md)（該当する計測が出たら更新） |
 | 実装の真実（動作仕様） | [`docs/SPEC.md`](SPEC.md) |
 | 実装変更の追跡 | Git。意味のあるドキュメント更新では **該当コミットのフル SHA** を ADR または SPEC 変更履歴に残す |
+| ブランチ・リリース・タグのルール | [`docs/GITFLOW.md`](GITFLOW.md)（`main` / `develop` / feature / release / hotfix） |
 
 ## 運用ルール（短く）
 
