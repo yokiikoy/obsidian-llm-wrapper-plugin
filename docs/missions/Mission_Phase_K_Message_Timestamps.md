@@ -21,4 +21,4 @@
 ## 実装状況ログ
 
 - 2026-04-06T20:14:30+09:00: Phase K を後追いで起票。実装コミット `1c69ddf`（本体）、`e06fa67`（ADR 記録 SHA 追記）。SPEC §5.8 / §6.9、TEST_SPEC 計 42 件。
-- 2026-04-06T20:14:30+09:00: `Mission_Phase_K_Message_Timestamps` 本ファイルと `Mission_Control_Sub` を追加・更新（コミット `954d4a6`）。
+- 2026-04-06T20:14:30+09:00: `Mission_Phase_K_Message_Timestamps` 本ファイルと `Mission_Control_Sub` を追加・更新（コミット `8fcb1ac61238671c67ed80ab9cddf78bb9d08ed1`）。
