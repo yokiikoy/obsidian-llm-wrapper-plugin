@@ -3,7 +3,7 @@
 本書は **リポジトリ内のソースコードが実際にどう動くか** を、実装に忠実に記述する。要件定義書（別紙）との差分があれば、**実装を正**とする。
 
 - **プラグイン ID:** `obsidian-ai-chat`（[`manifest.json`](../manifest.json)）
-- **バージョン:** `manifest.json` の `version` に従う（本書作成時点の例: `0.1.0`）
+- **バージョン:** `manifest.json` の `version` に従う（現行: `1.0.0`）
 - **主要ソース:** [`src/main.ts`](../src/main.ts), [`src/view.ts`](../src/view.ts), [`src/settings.ts`](../src/settings.ts), [`src/core/llm.ts`](../src/core/llm.ts)
 
 ---
