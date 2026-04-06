@@ -137,6 +137,9 @@ export class ChatSession {
    * Refuses if estimated prompt tokens exceed the provider safe limit (ADR 0002).
    */
   hydrateFromNoteMarkdown(markdown: string): { ok: true } | { ok: false; reason: string } {
+    if (this._inFlight) {
+      return { ok: false, reason: "Cannot load note while sending." };
+    }
     const parsed = parseNoteConversation(markdown);
     const settings = this.getSettings();
     const provider = settings.provider as LlmProviderId;
@@ -165,7 +168,11 @@ export class ChatSession {
 
   private chatOptions(): ChatOptions {
     const s = this.getSettings();
-    return { temperature: s.temperature, systemPrompt: s.systemPrompt };
+    return {
+      temperature: s.temperature,
+      systemPrompt: s.systemPrompt,
+      enableWebSearch: s.provider === "gemini" && s.enableWebSearch,
+    };
   }
 
   async send(rawInput: string, selectionContext: string): Promise<void> {
@@ -179,7 +186,9 @@ export class ChatSession {
     this._lockedTarget = file;
 
     const settings = this.getSettings();
-    const urlAppendix = await fetchUrlsAppendix(rawInput, (msg) => this.delegate.showNotice(msg));
+    const urlAppendix = settings.enableUrlFetch
+      ? await fetchUrlsAppendix(rawInput, (msg) => this.delegate.showNotice(msg))
+      : "";
     const rawForTurn = urlAppendix ? `${rawInput}${urlAppendix}` : rawInput;
     const baseUserTurn = buildUserTurnBody(rawForTurn, selectionContext);
     const wikilinkAppendix = await this.vault.buildWikilinkContext(

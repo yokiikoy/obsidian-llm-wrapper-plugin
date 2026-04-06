@@ -13,7 +13,7 @@
 
 | 項目           | 内容                                                                            |
 | ------------ | ----------------------------------------------------------------------------- |
-| プロバイダ        | **DeepSeek**（`deepseek-chat`）/ **Gemini**（`gemini-1.5-flash`、ストリーム API）       |
+| プロバイダ        | **DeepSeek**（`deepseek-chat`）/ **Gemini**（`gemini-2.5-flash`、ストリーム API）       |
 | ストリーミング      | 応答を逐次表示。完了後に Markdown として再描画                                                  |
 | 中止           | **Stop** で `AbortController` によりリクエスト中止（ユーザー中止時は Notice なし）                   |
 | メタデータ        | 完了時に prompt / completion トークン数を表示（取得できない場合は注記）                                |

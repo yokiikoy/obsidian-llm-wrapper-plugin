@@ -16,6 +16,10 @@ export interface AIChatSettings {
   enableWikilinkContextResolution: boolean;
   /** When true (default), stream reasoning into the chat UI; never written to the vault note. */
   showReasoningInChat: boolean;
+  /** When true, Gemini requests may include Google Search grounding tool. */
+  enableWebSearch: boolean;
+  /** When true (default), fetch URL appendix before send (Phase D). */
+  enableUrlFetch: boolean;
 }
 
 export const DEFAULT_SETTINGS: AIChatSettings = {
@@ -23,11 +27,13 @@ export const DEFAULT_SETTINGS: AIChatSettings = {
   deepseekApiKey: "",
   geminiApiKey: "",
   deepseekModel: "deepseek-chat",
-  geminiModel: "gemini-1.5-flash",
+  geminiModel: "gemini-2.5-flash",
   systemPrompt: "You are a helpful assistant inside Obsidian.",
   temperature: 0.7,
   enableWikilinkContextResolution: false,
   showReasoningInChat: true,
+  enableWebSearch: false,
+  enableUrlFetch: true,
 };
 
 export class AIChatSettingTab extends PluginSettingTab {
@@ -76,8 +82,8 @@ export class AIChatSettingTab extends PluginSettingTab {
       .setDesc("Model name in the Google AI stream endpoint.")
       .addDropdown((dropdown) =>
         dropdown
-          .addOption("gemini-1.5-flash", "gemini-1.5-flash")
-          .addOption("gemini-1.5-pro", "gemini-1.5-pro")
+          .addOption("gemini-2.5-flash", "gemini-2.5-flash")
+          .addOption("gemini-3.1-pro-preview", "gemini-3.1-pro-preview")
           .setValue(this.plugin.settings.geminiModel)
           .onChange(async (value) => {
             this.plugin.settings.geminiModel = value as GeminiModelId;

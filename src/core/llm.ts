@@ -10,6 +10,7 @@ export interface ChatMessage {
 export interface ChatOptions {
   temperature: number;
   systemPrompt: string;
+  enableWebSearch?: boolean;
 }
 
 export type ChunkCallback = (textChunk: string, reasoningChunk: string) => void;
@@ -38,7 +39,7 @@ export interface LlmClient {
 export type DeepseekModelId = "deepseek-chat" | "deepseek-reasoner";
 
 /** Gemini model id for `streamGenerateContent` path segment. */
-export type GeminiModelId = "gemini-1.5-flash" | "gemini-1.5-pro";
+export type GeminiModelId = "gemini-2.5-flash" | "gemini-3.1-pro-preview";
 
 export interface LlmCredentials {
   provider: LlmProviderId;
@@ -46,7 +47,7 @@ export interface LlmCredentials {
   geminiApiKey: string;
   /** Defaults to `deepseek-chat` when omitted. */
   deepseekModel?: DeepseekModelId;
-  /** Defaults to `gemini-1.5-flash` when omitted. */
+  /** Defaults to `gemini-2.5-flash` when omitted. */
   geminiModel?: GeminiModelId;
 }
 
@@ -289,6 +290,9 @@ function buildGeminiBody(
     contents,
     generationConfig: { temperature: options.temperature },
   };
+  if (options.enableWebSearch) {
+    body.tools = [{ google_search: {} }];
+  }
   if (systemText) {
     body.systemInstruction = { parts: [{ text: systemText }] };
   }
@@ -423,7 +427,7 @@ export function createLlmClient(creds: LlmCredentials): LlmClient {
     stream(messages, options, onChunk, signal) {
       const key = creds.geminiApiKey.trim();
       if (!key) return Promise.reject(new Error("Gemini API key is empty"));
-      const modelId = creds.geminiModel ?? "gemini-1.5-flash";
+      const modelId = creds.geminiModel ?? "gemini-2.5-flash";
       return geminiStream(messages, key, modelId, options, onChunk, signal);
     },
   };

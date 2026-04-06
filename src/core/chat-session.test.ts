@@ -9,6 +9,7 @@ import { ChatSession, type ChatSessionDelegate, type VaultAdapter } from "./chat
 import type { AIChatSettings } from "../settings";
 import type { ChatMessage, LlmClient, StreamResult } from "./llm";
 import * as llm from "./llm";
+import * as urlFetch from "./url-fetch";
 
 function makeFile(path: string): TFile {
   const f = new TFile();
@@ -22,11 +23,13 @@ function baseSettings(): AIChatSettings {
     deepseekApiKey: "sk-test",
     geminiApiKey: "",
     deepseekModel: "deepseek-chat",
-    geminiModel: "gemini-1.5-flash",
+    geminiModel: "gemini-2.5-flash",
     systemPrompt: "You are a helpful assistant inside Obsidian.",
     temperature: 0.7,
     enableWikilinkContextResolution: false,
     showReasoningInChat: true,
+    enableWebSearch: false,
+    enableUrlFetch: true,
   };
 }
 
@@ -119,6 +122,28 @@ describe("ChatSession", () => {
     expect(session.messages).toHaveLength(0);
     expect(delegate.onTurnRolledBack).toHaveBeenCalled();
     expect(delegate.showNotice).not.toHaveBeenCalled();
+  });
+
+  it("skips URL fetch when enableUrlFetch is off", async () => {
+    settings.enableUrlFetch = false;
+    const appendSpy = vi.fn(async () => {});
+    const vault = makeVault(appendSpy);
+    const delegate = makeDelegate();
+    const fetchSpy = vi.spyOn(urlFetch, "fetchUrlsAppendix");
+    const client: LlmClient = {
+      stream: vi.fn(async () => ({
+        content: "ok",
+        reasoning: "",
+        usage: { promptTokens: 1, completionTokens: 1 },
+      })),
+    };
+    const session = new ChatSession(vault, delegate, () => settings, () => client);
+    session.lockTarget(makeFile("note.md"));
+
+    await session.send("https://example.com", "");
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(appendSpy).toHaveBeenCalledTimes(1);
   });
 
   it("calls promptTokenLimitChoice when estimated prompt exceeds limit", async () => {
@@ -217,6 +242,45 @@ describe("ChatSession", () => {
     expect(delegate.onTurnRolledBack).toHaveBeenCalled();
     expect(delegate.onTurnComplete).not.toHaveBeenCalled();
     expect(delegate.showNotice).toHaveBeenCalledWith("AI Chat: append failed");
+  });
+
+
+
+  it("rejects hydrate while a send is in-flight", async () => {
+    const appendSpy = vi.fn(async () => {});
+    const vault = makeVault(appendSpy);
+    const delegate = makeDelegate();
+
+    let release!: () => void;
+    const blocker = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const client: LlmClient = {
+      stream: vi.fn(async () => {
+        await blocker;
+        return {
+          content: "Hello",
+          reasoning: "",
+          usage: { promptTokens: 1, completionTokens: 1 },
+        };
+      }),
+    };
+
+    const session = new ChatSession(vault, delegate, () => settings, () => client);
+    session.lockTarget(makeFile("note.md"));
+
+    const sendPromise = session.send("hi", "");
+    for (let i = 0; i < 20 && !session.inFlight; i += 1) {
+      await Promise.resolve();
+    }
+
+    const r = session.hydrateFromNoteMarkdown("### User\n\na\n\n### Assistant\n\nb\n");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("Cannot load note while sending.");
+    expect(delegate.onMessagesChanged).not.toHaveBeenCalled();
+
+    release();
+    await sendPromise;
   });
 
   it("rolls back when locked file disappears after stream before append", async () => {

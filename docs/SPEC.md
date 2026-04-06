@@ -81,8 +81,10 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 | `temperature` | number | `0.7` | 0〜2、スライダー刻み 0.05 |
 | `enableWikilinkContextResolution` | boolean | `false` | オン時のみ `[[wikilink]]` を深さ 1 で解決しユーザーターンに連結（§6.6.1） |
 | `deepseekModel` | `"deepseek-chat" \| "deepseek-reasoner"` | `"deepseek-chat"` | DeepSeek API の `model` フィールド |
-| `geminiModel` | `"gemini-1.5-flash" \| "gemini-1.5-pro"` | `"gemini-1.5-flash"` | Gemini ストリームエンドポイントのモデル名 |
+| `geminiModel` | `"gemini-2.5-flash" \| "gemini-3.1-pro-preview"` | `"gemini-2.5-flash"` | Gemini ストリームエンドポイントのモデル名 |
 | `showReasoningInChat` | boolean | `true` | オフ時はチャット UI に推論を表示しない（Vault 追記は常に本文のみ） |
+| `enableWebSearch` | boolean | `false` | Gemini のときのみ Google Search grounding tool を有効化 |
+| `enableUrlFetch` | boolean | `true` | 送信前 URL フェッチ（§5.7）を有効化 |
 
 設定 UI は英語ラベル（Model, DeepSeek API key, …）。API キー入力は `type="password"`。変更は即 `saveSettings()`。
 
@@ -95,7 +97,7 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 - `LlmClient.stream(messages, options, onChunk, signal): Promise<StreamResult>` — **SSE ストリーミング**。`onChunk(textChunk, reasoningChunk)` で増分を通知（reasoning が無いプロバイダでは第 2 引数は空）。`signal` が `abort()` されると読み取りを打ち切り、`AbortError` 相当で拒否。
 - `StreamResult`: `content`（連結済み本文）、`reasoning`（連結済み、無ければ空）、`usage`（`promptTokens` / `completionTokens`、取得不可時は `0`）。
 - `ChatMessage`: `role` は `system` | `user` | `assistant`、`content` はプレーンテキスト。
-- `ChatOptions`: `temperature`, `systemPrompt`。
+- `ChatOptions`: `temperature`, `systemPrompt`, `enableWebSearch?`（Gemini のみ有効）。
 - `isAbortError(e)` — オブジェクトの **`name === "AbortError"`** で判定（`instanceof` に依存しない。View でサイレント中止に使用）。
 
 ### 5.2 DeepSeek
@@ -110,10 +112,11 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 
 ### 5.3 Gemini
 
-- **HTTP:** `POST https://generativelanguage.googleapis.com/v1beta/models/<geminiModel>:streamGenerateContent?alt=sse&key=<apiKey>`（`<geminiModel>` は設定、既定 `gemini-1.5-flash`、**SSE**）
+- **HTTP:** `POST https://generativelanguage.googleapis.com/v1beta/models/<geminiModel>:streamGenerateContent?alt=sse&key=<apiKey>`（`<geminiModel>` は設定、既定 `gemini-2.5-flash`、**SSE**）
 - **system:** 設定 `systemPrompt` と、入力 `messages` 内の `system` を連結し、`systemInstruction.parts[0].text` に渡す（空なら省略）。
 - **会話:** `system` を除き、`user` → `user`、`assistant` → `model`。**連続同一 role は `parts` をマージ**。
 - **generationConfig:** `{ temperature }` のみ。
+- **Web Search tool:** `enableWebSearch` が真のとき `tools: [{ google_search: {} }]` を body に付与。
 - **SSE:** イベント JSON の `candidates[0].content.parts` テキストを処理する。API は **累積全文**または**純粋な差分**のいずれでも来うるため、空でない `textAggregate` があるときは `piece.startsWith(textAggregate)` で累積とみなし増分だけを `onChunk` に渡し、そうでなければ差分として全文を加算する。先頭チャンクは `textAggregate` が空のため別扱い（`"".startsWith("")` の誤判定を避ける）。`usageMetadata` を `StreamResult.usage` に。
 - **エラー:** 非 2xx は `error.message` または `Gemini HTTP <status>`。ストリーム完了後にテキスト空なら `Gemini: empty response`。
 
@@ -141,6 +144,7 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 ### 5.7 送信前 URL 取り込み（[`src/core/url-fetch.ts`](../src/core/url-fetch.ts)）
 
 - ユーザー入力から **http(s) URL** を抽出（重複除去、最大 5 件）。
+- 設定 `enableUrlFetch` が **true** のときのみ実行（既定 ON）。
 - **`requestUrl`** で順に取得し、`DOMParser` で本文をプレーンテキスト化（`script` / `style` 除去、長さ上限あり）。失敗時は Notice、他 URL は続行。
 - 連結は `buildUserTurnBody` **より前**（wikilink 解決の `rawInput` は **元の入力**のまま）。
 
@@ -148,6 +152,7 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 
 - 見出しは **`### User`** / **`### Assistant`** のみ（Vault 追記と同一）。先頭 YAML `---` … `---` はスキップしてからパース。
 - UI は View の **Load note**（ロック済みノートを `vault.read`）。成功時に `hydrateFromNoteMarkdown`。
+- **実行制約:** 送信中（`session.inFlight`）は実行不可。さらに Load note 自体も実行中フラグで多重実行を拒否する。
 
 ---
 
@@ -164,7 +169,7 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 1. **Target ブロック**（`ai-chat-target`）— **ノート選択**（`select.ai-chat-target-select`）、**状態行**（`ai-chat-target-detail`）、**推定トークン行**（`ai-chat-token-estimate`）— `ChatSession.estimateCurrentTokens`（内部で `estimatePromptTokens`）により **履歴＋システム**、入力欄に文字があるときは **ドラフトを仮の user メッセージとして加算**（wikilink 追記は含めない）。表示形式: `Estimated prompt: ~N / L tokens`、ドラフトあり時は `(incl. draft input)` を付与。入力は 200ms デバウンスで更新。
 2. **履歴**（`ai-chat-history`）— 縦フレックス。各メッセージは `ai-chat-msg` + ロール修飾子 `ai-chat-msg-user`（右寄せ）または `ai-chat-msg-assistant`（左寄せ）。ロールラベル（`ai-chat-msg-role`）の下に **吹き出し内側** `ai-chat-msg-bubble-inner`（`overflow-x: auto`、`word-break` 系でコードブロック・テーブルが横幅を突き破らない）。確定済み本文は `MarkdownRenderer.render`、ストリーム中のアシスタントのみプレーンテキスト → 完了後に再描画。
 3. **入力**（`textarea.ai-chat-input`）— 複数行。**Ctrl+Enter / Cmd+Enter**（および **Mod+Enter**：macOS では Cmd、それ以外では Ctrl）で送信（通常 Enter は改行）。**IME 変換中**（`isComposing`）は送信しない。Obsidian はキーを DOM のみで拾えないことがあるため、**`View.scope`（`new Scope(this.app.scope)`）に `Scope.register`** で `Mod` / `Ctrl` / `Meta` と `Enter` / `NumpadEnter` を登録し、**フォーカスが入力欄のときだけ** `onSend` する（ハンドラは `false` を返して既定処理を抑止）。
-4. **ツールバー:** **API model**（`select`、現在のプロバイダに応じた `deepseekModel` / `geminiModel`）、**Load note**（ロック中ノートから §5.8 再水和）、**Send**（`mod-cta`）、**Stop**（`mod-warning`、送信中のみ表示）、**Clear session**、**Usage**、読み込み文言 `Waiting for model…`（`ai-chat-loading`）。設定タブでプロバイダを変えたあと View を開き直すまでツールバーのモデル一覧が古い場合がある。
+4. **ツールバー:** **API model**（単一 `select` に `[DeepSeek] ...` / `[Gemini] ...` を統合）、**Web Search** トグル（🌐、Gemini 時のみ有効）、**URL Fetch** トグル（🔗）、**Load note**（ロック中ノートから §5.8 再水和。送信中は無効・多重クリック抑止）、**Send**（`mod-cta`）、**Stop**（`mod-warning`、送信中のみ表示）、**Clear session**、**Usage**、外部リンク（Gemini Web / AI Studio）、読み込み文言 `Waiting for model…`（`ai-chat-loading`）。トグルとモデル変更は即 `saveSettings()` される。
 
 ### 6.3 状態（インスタンスフィールド）
 

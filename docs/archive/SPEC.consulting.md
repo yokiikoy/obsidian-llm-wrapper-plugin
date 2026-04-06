@@ -90,7 +90,7 @@ system は messages 内と systemPrompt をマージして先頭 1 本
 
 ### 5.3 Gemini
 
-POST …/models/gemini-1.5-flash:generateContent?key=…（固定）
+POST …/models/gemini-2.5-flash:generateContent?key=…（固定）
 systemInstruction に system 相当をマージ
 user/model 変換、連続同一 role は parts マージ
 generationConfig は temperature のみ

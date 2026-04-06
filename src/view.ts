@@ -17,7 +17,7 @@ import {
   type ChatSessionDelegate,
   type VaultAdapter,
 } from "./core/chat-session";
-import type { StreamResult } from "./core/llm";
+import type { DeepseekModelId, GeminiModelId, LlmProviderId, StreamResult } from "./core/llm";
 import {
   buildWikilinkContextAppendix,
   wikilinkContextOptionsFromSettings,
@@ -33,6 +33,20 @@ const USAGE_URLS = {
 
 /** Cap dropdown options to avoid DOM freeze on huge vaults; sorted by `mtime` desc. */
 const TARGET_SELECT_MAX_FILES = 50;
+const TOOLBAR_MODEL_OPTIONS: {
+  provider: LlmProviderId;
+  model: DeepseekModelId | GeminiModelId;
+  label: string;
+}[] = [
+  { provider: "deepseek", model: "deepseek-chat", label: "[DeepSeek] deepseek-chat" },
+  { provider: "deepseek", model: "deepseek-reasoner", label: "[DeepSeek] deepseek-reasoner" },
+  { provider: "gemini", model: "gemini-2.5-flash", label: "[Gemini] gemini-2.5-flash" },
+  {
+    provider: "gemini",
+    model: "gemini-3.1-pro-preview",
+    label: "[Gemini] gemini-3.1-pro-preview",
+  },
+];
 
 export interface UiMessage {
   role: "user" | "assistant";
@@ -73,6 +87,10 @@ export class AIChatView extends ItemView implements ChatSessionDelegate {
   private stopBtn!: HTMLButtonElement;
   private clearBtn!: HTMLButtonElement;
   private usageBtn!: HTMLButtonElement;
+  private webSearchToggleBtn!: HTMLButtonElement;
+  private urlFetchToggleBtn!: HTMLButtonElement;
+  private geminiWebBtn!: HTMLButtonElement;
+  private aiStudioBtn!: HTMLButtonElement;
   private loadFromNoteBtn!: HTMLButtonElement;
   private modelSelectEl!: HTMLSelectElement;
   private loadingEl!: HTMLSpanElement;
@@ -80,6 +98,7 @@ export class AIChatView extends ItemView implements ChatSessionDelegate {
   private targetSelectEl!: HTMLSelectElement;
   private tokenEstimateEl!: HTMLSpanElement;
   private tokenEstimateDebounce: ReturnType<typeof setTimeout> | undefined;
+  private loadNoteInFlight = false;
 
   /** Rows created for an in-flight stream; removed on abort/error before commit. */
   private pendingStreamRows: {
@@ -153,6 +172,16 @@ export class AIChatView extends ItemView implements ChatSessionDelegate {
     this.modelSelectEl = modelRow.createEl("select", { cls: "ai-chat-model-select" });
     this.syncModelToolbar();
     this.modelSelectEl.addEventListener("change", () => void this.onModelToolbarChange());
+    this.webSearchToggleBtn = toolbar.createEl("button", {
+      text: "🌐 Off",
+      attr: { title: "Web Search (Gemini only)" },
+    });
+    this.urlFetchToggleBtn = toolbar.createEl("button", {
+      text: "🔗 On",
+      attr: { title: "URL Fetch before send" },
+    });
+    this.webSearchToggleBtn.addEventListener("click", () => void this.onToggleWebSearch());
+    this.urlFetchToggleBtn.addEventListener("click", () => void this.onToggleUrlFetch());
     this.loadFromNoteBtn = toolbar.createEl("button", {
       text: "Load note",
       attr: { title: "Load ### User / ### Assistant history from the locked note" },
@@ -164,12 +193,27 @@ export class AIChatView extends ItemView implements ChatSessionDelegate {
     this.stopBtn.style.display = "none";
     this.clearBtn = toolbar.createEl("button", { text: "Clear session" });
     this.usageBtn = toolbar.createEl("button", { text: "Usage" });
+    this.geminiWebBtn = toolbar.createEl("button", {
+      text: "Gemini",
+      attr: { title: "Open Gemini Web" },
+    });
+    this.aiStudioBtn = toolbar.createEl("button", {
+      text: "AI Studio",
+      attr: { title: "Open Google AI Studio" },
+    });
     this.loadingEl = toolbar.createSpan({ cls: "ai-chat-loading", text: "" });
 
     this.sendBtn.addEventListener("click", () => void this.onSend());
     this.stopBtn.addEventListener("click", () => this.onStop());
     this.clearBtn.addEventListener("click", () => this.onClearSession());
     this.usageBtn.addEventListener("click", () => this.onUsage());
+    this.geminiWebBtn.addEventListener("click", () => {
+      window.open("https://gemini.google.com/", "_blank", "noopener,noreferrer");
+    });
+    this.aiStudioBtn.addEventListener("click", () => {
+      window.open("https://aistudio.google.com/", "_blank", "noopener,noreferrer");
+    });
+    this.syncToolbarToggles();
 
     this.syncTargetSelectEnabled();
     this.refreshTargetLabel();
@@ -301,49 +345,92 @@ export class AIChatView extends ItemView implements ChatSessionDelegate {
   }
 
   private syncModelToolbar(): void {
-    const p = this.plugin.settings.provider;
     const sel = this.modelSelectEl;
     sel.empty();
-    if (p === "deepseek") {
-      sel.createEl("option", { value: "deepseek-chat", text: "deepseek-chat" });
-      sel.createEl("option", { value: "deepseek-reasoner", text: "deepseek-reasoner" });
-      sel.value = this.plugin.settings.deepseekModel;
-    } else {
-      sel.createEl("option", { value: "gemini-1.5-flash", text: "gemini-1.5-flash" });
-      sel.createEl("option", { value: "gemini-1.5-pro", text: "gemini-1.5-pro" });
-      sel.value = this.plugin.settings.geminiModel;
+    for (const opt of TOOLBAR_MODEL_OPTIONS) {
+      const value = `${opt.provider}:${opt.model}`;
+      sel.createEl("option", { value, text: opt.label });
     }
+    const activeModel =
+      this.plugin.settings.provider === "deepseek"
+        ? this.plugin.settings.deepseekModel
+        : this.plugin.settings.geminiModel;
+    sel.value = `${this.plugin.settings.provider}:${activeModel}`;
   }
 
   private async onModelToolbarChange(): Promise<void> {
-    const v = this.modelSelectEl.value;
-    if (this.plugin.settings.provider === "deepseek") {
-      this.plugin.settings.deepseekModel = v as typeof this.plugin.settings.deepseekModel;
+    const [providerRaw, modelRaw] = this.modelSelectEl.value.split(":");
+    const provider = providerRaw as LlmProviderId;
+    if (provider === "deepseek") {
+      this.plugin.settings.provider = "deepseek";
+      this.plugin.settings.deepseekModel = modelRaw as DeepseekModelId;
+      this.plugin.settings.enableWebSearch = false;
     } else {
-      this.plugin.settings.geminiModel = v as typeof this.plugin.settings.geminiModel;
+      this.plugin.settings.provider = "gemini";
+      this.plugin.settings.geminiModel = modelRaw as GeminiModelId;
     }
     await this.plugin.saveSettings();
+    this.syncModelToolbar();
+    this.syncToolbarToggles();
+  }
+
+  private syncToolbarToggles(): void {
+    const s = this.plugin.settings;
+    this.urlFetchToggleBtn.classList.toggle("mod-cta", s.enableUrlFetch);
+    this.urlFetchToggleBtn.setText(`🔗 ${s.enableUrlFetch ? "On" : "Off"}`);
+
+    const webSearchAvailable = s.provider === "gemini";
+    const webSearchOn = webSearchAvailable && s.enableWebSearch;
+    this.webSearchToggleBtn.disabled = !webSearchAvailable;
+    this.webSearchToggleBtn.classList.toggle("mod-cta", webSearchOn);
+    this.webSearchToggleBtn.setText(`🌐 ${webSearchOn ? "On" : "Off"}`);
+  }
+
+  private async onToggleWebSearch(): Promise<void> {
+    if (this.plugin.settings.provider !== "gemini") return;
+    this.plugin.settings.enableWebSearch = !this.plugin.settings.enableWebSearch;
+    await this.plugin.saveSettings();
+    this.syncToolbarToggles();
+  }
+
+  private async onToggleUrlFetch(): Promise<void> {
+    this.plugin.settings.enableUrlFetch = !this.plugin.settings.enableUrlFetch;
+    await this.plugin.saveSettings();
+    this.syncToolbarToggles();
   }
 
   private async onLoadNoteHistory(): Promise<void> {
-    const t = this.session.lockedTarget;
-    if (!t) {
-      new Notice("AI Chat: lock a note first (send once to lock the target).");
+    if (this.session.inFlight) {
+      new Notice("AI Chat: cannot load note while sending.");
       return;
     }
-    let text: string;
+    if (this.loadNoteInFlight) return;
+    this.loadNoteInFlight = true;
+    this.setLoading(this.session.inFlight);
+
     try {
-      text = await this.app.vault.read(t);
-    } catch (e) {
-      new Notice(`AI Chat: could not read note: ${e instanceof Error ? e.message : String(e)}`);
-      return;
+      const t = this.session.lockedTarget;
+      if (!t) {
+        new Notice("AI Chat: lock a note first (send once to lock the target).");
+        return;
+      }
+      let text: string;
+      try {
+        text = await this.app.vault.read(t);
+      } catch (e) {
+        new Notice(`AI Chat: could not read note: ${e instanceof Error ? e.message : String(e)}`);
+        return;
+      }
+      const result = this.session.hydrateFromNoteMarkdown(text);
+      if (!result.ok) {
+        new Notice(`AI Chat: ${result.reason}`);
+        return;
+      }
+      new Notice("AI Chat: loaded conversation from the locked note.");
+    } finally {
+      this.loadNoteInFlight = false;
+      this.setLoading(this.session.inFlight);
     }
-    const result = this.session.hydrateFromNoteMarkdown(text);
-    if (!result.ok) {
-      new Notice(`AI Chat: ${result.reason}`);
-      return;
-    }
-    new Notice("AI Chat: loaded conversation from the locked note.");
   }
 
   private getSelectionContext(): string {
@@ -360,6 +447,9 @@ export class AIChatView extends ItemView implements ChatSessionDelegate {
     this.sendBtn.style.display = loading ? "none" : "";
     this.stopBtn.style.display = loading ? "" : "none";
     this.sendBtn.disabled = loading;
+    if (this.loadFromNoteBtn) {
+      this.loadFromNoteBtn.disabled = loading || this.loadNoteInFlight;
+    }
     this.loadingEl.setText(loading ? "Waiting for model…" : "");
   }
 
@@ -367,6 +457,12 @@ export class AIChatView extends ItemView implements ChatSessionDelegate {
     if (this.session.inFlight) return;
     const rawInput = this.inputEl.value.trim();
     if (!rawInput) return;
+    if (this.plugin.settings.provider === "gemini" && this.plugin.settings.enableWebSearch) {
+      const ok = window.confirm(
+        "Web Search is enabled. The model may call Google Search for this request. Continue?"
+      );
+      if (!ok) return;
+    }
 
     if (!this.session.lockedTarget) {
       const picked = this.targetSelectEl.value;

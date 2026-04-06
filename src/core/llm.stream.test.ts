@@ -193,4 +193,27 @@ describe("createLlmClient stream (fetch mocked)", () => {
     );
     expect(out.content).toBe("Hi there");
   });
+
+  it("Gemini attaches google_search tool when enableWebSearch is true", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        textEncoderStream(['data: {"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}\n\n']),
+        { status: 200 }
+      )
+    );
+    const client = createLlmClient({
+      provider: "gemini",
+      deepseekApiKey: "",
+      geminiApiKey: "g",
+    });
+    await client.stream(
+      [{ role: "user", content: "latest news" }],
+      { temperature: 0, systemPrompt: "", enableWebSearch: true },
+      () => {},
+      new AbortController().signal
+    );
+    const init = vi.mocked(fetch).mock.calls[0][1];
+    const body = JSON.parse(String(init?.body ?? "{}"));
+    expect(body.tools).toEqual([{ google_search: {} }]);
+  });
 });

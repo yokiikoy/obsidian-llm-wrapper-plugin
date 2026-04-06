@@ -27,7 +27,23 @@ export default class AIChatPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const loaded = (await this.loadData()) as Partial<AIChatSettings> | null;
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, loaded ?? {});
+    let migrated = false;
+    const loadedGemini = loaded?.geminiModel;
+    if (
+      typeof loadedGemini === "string" &&
+      loadedGemini !== "gemini-2.5-flash" &&
+      loadedGemini !== "gemini-3.1-pro-preview"
+    ) {
+      this.settings.geminiModel = loadedGemini.includes("pro")
+        ? "gemini-3.1-pro-preview"
+        : "gemini-2.5-flash";
+      migrated = true;
+    }
+    if (migrated) {
+      await this.saveData(this.settings);
+    }
   }
 
   async saveSettings(): Promise<void> {
