@@ -3,7 +3,7 @@
 **LLM chat inside Obsidian** with **Markdown session logging** to a vault note. Supports **DeepSeek** and **Google Gemini**, **streaming** replies, **Stop** (abort), optional **wikilink context** (depth‑1), and usage metadata after each turn.
 
 - **Plugin ID:** `obsidian-ai-chat`（Community Plugins での識別子）
-- **Version:** `manifest.json` の `version`（現行 **1.0.0**）
+- **Version:** `manifest.json` の `version`（現行 **1.1.0**）
 - **GitHub:** [yokiikoy/obsidian-llm-wrapper-plugin](https://github.com/yokiikoy/obsidian-llm-wrapper-plugin)（リポジトリ名とプラグイン ID は別）
 
 ---

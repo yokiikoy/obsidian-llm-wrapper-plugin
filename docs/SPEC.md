@@ -3,7 +3,7 @@
 本書は **リポジトリ内のソースコードが実際にどう動くか** を、実装に忠実に記述する。要件定義書（別紙）との差分があれば、**実装を正**とする。
 
 - **プラグイン ID:** `obsidian-ai-chat`（[`manifest.json`](../manifest.json)）
-- **バージョン:** `manifest.json` の `version` に従う（現行: `1.0.0`）
+- **バージョン:** `manifest.json` の `version` に従う（現行: `1.1.0`）
 - **主要ソース:** [`src/main.ts`](../src/main.ts), [`src/view.ts`](../src/view.ts), [`src/settings.ts`](../src/settings.ts), [`src/core/llm.ts`](../src/core/llm.ts)
 
 ---
@@ -301,5 +301,6 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 | 2026-04-06 | **v1.0.0** リリース確定: `manifest.json` / `package.json` を `1.0.0` に | `5960c92c34461bd88ded3f1b49bbdfd62d681815` |
 | 2026-04-06 | git-flow 採用: [`docs/GITFLOW.md`](GITFLOW.md)、`develop` ブランチ作成、`RECORDS.md` からリンク | `e5bfc50a271ea85f1dcee50130890afd0b3d3623` |
 | 2026-04-06 | Phase C（UI）: ターゲット `<select>`（`mtime` 降順・最新 50 件）、吹き出し左右レイアウト・内側 `overflow-x`/折り返し、Ctrl/Cmd+Enter 送信（`isComposing` ガード） | （未コミット可） |
+| 2026-04-06 | **v1.1.0** 確定: `manifest.json` / `package.json` を `1.1.0` に（Vitest・core テスト、UI 改善、送信は `Scope` 登録） |  |
 
 記録運用は [`docs/RECORDS.md`](RECORDS.md) を参照。
