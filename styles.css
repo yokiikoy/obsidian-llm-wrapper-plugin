@@ -49,6 +49,17 @@
   text-align: right;
 }
 
+.ai-chat-msg-time {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  margin: 0 2px 3px;
+  letter-spacing: 0.02em;
+}
+
+.ai-chat-msg-user .ai-chat-msg-time {
+  text-align: right;
+}
+
 .ai-chat-msg-bubble-inner {
   overflow-x: auto;
   word-break: break-word;

@@ -34,12 +34,12 @@ export interface VaultAdapter {
  * before the vault append (same order as the pre-refactor view).
  */
 export interface ChatSessionDelegate {
-  onSendStarting(userContent: string): void | Promise<void>;
+  onSendStarting(userContent: string, userAt: string): void | Promise<void>;
   onStreamChunk(textChunk: string, reasoningChunk: string): void;
   /** Render assistant markdown (after stream, before vault append). */
   onStreamFinished(result: StreamResult): Promise<void>;
   /** After append + session messages updated: usage line, clear input, clear pending rows. */
-  onTurnComplete(userContent: string, result: StreamResult): void;
+  onTurnComplete(userContent: string, result: StreamResult, assistantAt: string): void;
   onTurnRolledBack(): void;
   onLoadingChanged(loading: boolean): void;
   onMessagesChanged(): void;
@@ -58,9 +58,16 @@ function buildUserTurnBody(rawInput: string, selection: string): string {
   return `${rawInput}\n\n---\n\n**Selection from note:**\n\n${selection}`;
 }
 
-function formatNoteBlock(userContent: string, assistantContent: string): string {
+function formatNoteBlock(
+  userContent: string,
+  assistantContent: string,
+  userAt: string,
+  assistantAt: string
+): string {
   const leadingSep = "\n\n";
-  const body = `### User\n\n${userContent}\n\n### Assistant\n\n${assistantContent}\n`;
+  const u = `<!-- ai-chat-at:${userAt} -->`;
+  const a = `<!-- ai-chat-at:${assistantAt} -->`;
+  const body = `### User\n\n${u}\n\n${userContent}\n\n### Assistant\n\n${a}\n\n${assistantContent}\n`;
   return `${leadingSep}${body}`;
 }
 
@@ -270,7 +277,8 @@ export class ChatSession {
     this.abortController = new AbortController();
     const { signal } = this.abortController;
 
-    await Promise.resolve(this.delegate.onSendStarting(userContent));
+    const userAt = new Date().toISOString();
+    await Promise.resolve(this.delegate.onSendStarting(userContent, userAt));
     this.delegate.onLoadingChanged(true);
 
     try {
@@ -289,13 +297,14 @@ export class ChatSession {
       if (!file) {
         throw new Error("Target note no longer exists; cannot append.");
       }
-      const block = formatNoteBlock(userContent, result.content);
+      const assistantAt = new Date().toISOString();
+      const block = formatNoteBlock(userContent, result.content, userAt, assistantAt);
       await this.vault.appendToFile(file, block);
 
-      this._messages.push({ role: "user", content: userContent });
-      this._messages.push({ role: "assistant", content: result.content });
+      this._messages.push({ role: "user", content: userContent, createdAt: userAt });
+      this._messages.push({ role: "assistant", content: result.content, createdAt: assistantAt });
 
-      this.delegate.onTurnComplete(userContent, result);
+      this.delegate.onTurnComplete(userContent, result, assistantAt);
     } catch (e) {
       if (!isAbortError(e)) {
         const msg = e instanceof Error ? e.message : String(e);

@@ -191,6 +191,7 @@
 | CS4 | トークン超過 → Truncate        | `_messages` に 4 件を注入、`estimatePromptTokens` が長い履歴で超過・短い候補で上限内、`promptTokenLimitChoice` が `"truncate"`（1 回） | 先頭ターンが落ち `onMessagesChanged` のあと `stream` / `append` が成功し、残り履歴＋今ターンが `messages` に残る |
 | CS5 | `appendToFile` 失敗            | `stream` 成功後 `appendToFile` が reject                              | `messages` は空のまま、`onTurnRolledBack`、`showNotice` にエラー文言                    |
 | CS6 | ストリーム後にロックファイル消失     | `resolveFile` が 1 回目は `TFile`、2 回目（追記直前）は `null`                 | `append` なし、`messages` 不変、`onTurnRolledBack`、Notice に「no longer exists」系        |
+| CS7 | `hydrateFromNoteMarkdown` と時刻 | ノート本文に `<!-- ai-chat-at:... -->` 付きの User/Assistant ブロック | `ok: true`、`messages[].createdAt` が復元される |
 
 ---
 
@@ -204,10 +205,10 @@
 | `llm.test.ts`              | 12        | メッセージ窓 + Abort 判定       |
 | `llm.stream.test.ts`       | 9         | `createLlmClient` ストリーム |
 | `wikilink-context.test.ts` | 5         | ウィキリンク抽出                |
-| `chat-session.test.ts`     | 8         | `ChatSession` + Vault モック（`url-fetch` はモック） |
-| `note-conversation-parser.test.ts` | 3 | 見出しパース |
+| `chat-session.test.ts`     | 9         | `ChatSession` + Vault モック（`url-fetch` はモック） |
+| `note-conversation-parser.test.ts` | 5 | 見出しパース・`<!-- ai-chat-at -->` |
 | `url-fetch.test.ts`        | 2         | `extractUrls` |
-| **合計**                     | **39**    | —                       |
+| **合計**                     | **42**    | —                       |
 
 
 ---
@@ -252,5 +253,6 @@
 | 2026-04-06 | `note-conversation-parser` / `url-fetch`（extractUrls）と件数サマリ（計 36）を追記 |
 | 2026-04-06 | §9 Android 手動検証チェックリストを追加（セクション番号繰り下げ） |
 | 2026-04-06 | 件数サマリを Vitest 実数（計 39）に合わせて更新 |
+| 2026-04-06 | メッセージ時刻: `chat-session` +1、`note-conversation-parser` +2、件数計 42 |
 
 

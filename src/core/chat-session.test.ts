@@ -95,9 +95,12 @@ describe("ChatSession", () => {
     expect(appended).toContain("hi");
     expect(appended).toContain("### Assistant");
     expect(appended).toContain("Hello");
+    expect(appended).toMatch(/<!-- ai-chat-at:[^>]+-->/);
     expect(session.messages).toHaveLength(2);
-    expect(session.messages[0]).toEqual({ role: "user", content: "hi" });
-    expect(session.messages[1]).toEqual({ role: "assistant", content: "Hello" });
+    expect(session.messages[0]).toMatchObject({ role: "user", content: "hi" });
+    expect(session.messages[0].createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(session.messages[1]).toMatchObject({ role: "assistant", content: "Hello" });
+    expect(session.messages[1].createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(delegate.onTurnComplete).toHaveBeenCalled();
     expect(delegate.onTurnRolledBack).not.toHaveBeenCalled();
   });
@@ -209,8 +212,10 @@ describe("ChatSession", () => {
     expect(session.messages).toHaveLength(4);
     expect(session.messages[0]).toEqual({ role: "user", content: "old-u2" });
     expect(session.messages[1]).toEqual({ role: "assistant", content: "old-a2" });
-    expect(session.messages[2]).toEqual({ role: "user", content: "hi" });
-    expect(session.messages[3]).toEqual({ role: "assistant", content: "Hello" });
+    expect(session.messages[2]).toMatchObject({ role: "user", content: "hi" });
+    expect(session.messages[2].createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(session.messages[3]).toMatchObject({ role: "assistant", content: "Hello" });
+    expect(session.messages[3].createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(delegate.onTurnComplete).toHaveBeenCalled();
     expect(delegate.onTurnRolledBack).not.toHaveBeenCalled();
   });
@@ -245,6 +250,31 @@ describe("ChatSession", () => {
   });
 
 
+
+  it("hydrate restores createdAt from vault wire format", () => {
+    const vault = makeVault(vi.fn());
+    const delegate = makeDelegate();
+    const session = new ChatSession(vault, delegate, () => settings);
+    const md = `### User
+
+<!-- ai-chat-at:2026-04-06T12:00:00.000Z -->
+
+u1
+
+### Assistant
+
+<!-- ai-chat-at:2026-04-06T12:00:01.000Z -->
+
+a1
+`;
+    const r = session.hydrateFromNoteMarkdown(md);
+    expect(r.ok).toBe(true);
+    expect(session.messages).toHaveLength(2);
+    expect(session.messages[0].content).toBe("u1");
+    expect(session.messages[0].createdAt).toBe("2026-04-06T12:00:00.000Z");
+    expect(session.messages[1].content).toBe("a1");
+    expect(session.messages[1].createdAt).toBe("2026-04-06T12:00:01.000Z");
+  });
 
   it("rejects hydrate while a send is in-flight", async () => {
     const appendSpy = vi.fn(async () => {});

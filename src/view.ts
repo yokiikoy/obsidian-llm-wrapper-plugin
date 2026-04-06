@@ -52,6 +52,13 @@ const TOOLBAR_MODEL_OPTIONS: {
 export interface UiMessage {
   role: "user" | "assistant";
   content: string;
+  createdAt?: string;
+}
+
+function formatMessageTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
 }
 
 function createVaultAdapter(app: App): VaultAdapter {
@@ -105,6 +112,7 @@ export class AIChatView extends ItemView implements ChatSessionDelegate {
   private pendingStreamRows: {
     userWrap: HTMLElement;
     asstWrap: HTMLElement;
+    asstTimeEl: HTMLDivElement;
     plainLayer: HTMLDivElement;
     reasonPlain: HTMLDivElement;
     mdLayer: HTMLDivElement;
@@ -273,6 +281,9 @@ export class AIChatView extends ItemView implements ChatSessionDelegate {
       cls: `ai-chat-msg ai-chat-msg-${msg.role}`,
     });
     wrap.createDiv({ cls: "ai-chat-msg-role", text: msg.role });
+    if (msg.createdAt) {
+      wrap.createDiv({ cls: "ai-chat-msg-time", text: formatMessageTime(msg.createdAt) });
+    }
     const inner = wrap.createDiv({ cls: "ai-chat-msg-bubble-inner" });
     await MarkdownRenderer.render(
       this.app,
@@ -292,7 +303,11 @@ export class AIChatView extends ItemView implements ChatSessionDelegate {
     this.historyEl.empty();
     for (const m of this.session.messages) {
       if (m.role === "user" || m.role === "assistant") {
-        await this.appendRenderedMessage({ role: m.role, content: m.content });
+        await this.appendRenderedMessage({
+          role: m.role,
+          content: m.content,
+          createdAt: m.createdAt,
+        });
       }
     }
     this.refreshTokenEstimate();
@@ -496,9 +511,10 @@ export class AIChatView extends ItemView implements ChatSessionDelegate {
 
   // --- ChatSessionDelegate ---
 
-  async onSendStarting(userContent: string): Promise<void> {
+  async onSendStarting(userContent: string, userAt: string): Promise<void> {
     const userWrap = this.historyEl.createDiv({ cls: "ai-chat-msg ai-chat-msg-user" });
     userWrap.createDiv({ cls: "ai-chat-msg-role", text: "user" });
+    userWrap.createDiv({ cls: "ai-chat-msg-time", text: formatMessageTime(userAt) });
     const userBubble = userWrap.createDiv({ cls: "ai-chat-msg-bubble-inner" });
     await MarkdownRenderer.render(
       this.app,
@@ -510,6 +526,8 @@ export class AIChatView extends ItemView implements ChatSessionDelegate {
 
     const asstWrap = this.historyEl.createDiv({ cls: "ai-chat-msg ai-chat-msg-assistant" });
     asstWrap.createDiv({ cls: "ai-chat-msg-role", text: "assistant" });
+    const asstTimeEl = asstWrap.createDiv({ cls: "ai-chat-msg-time", text: "" });
+    asstTimeEl.style.display = "none";
     const asstBubble = asstWrap.createDiv({ cls: "ai-chat-msg-bubble-inner" });
     const stack = asstBubble.createDiv({ cls: "ai-chat-md-stack" });
     const reasonPlain = stack.createDiv({ cls: "ai-chat-reason-plain" });
@@ -524,6 +542,7 @@ export class AIChatView extends ItemView implements ChatSessionDelegate {
     this.pendingStreamRows = {
       userWrap,
       asstWrap,
+      asstTimeEl,
       plainLayer,
       reasonPlain,
       mdLayer,
@@ -565,9 +584,11 @@ export class AIChatView extends ItemView implements ChatSessionDelegate {
     );
   }
 
-  onTurnComplete(_userContent: string, result: StreamResult): void {
+  onTurnComplete(_userContent: string, result: StreamResult, assistantAt: string): void {
     const p = this.pendingStreamRows;
     if (!p) return;
+    p.asstTimeEl.setText(formatMessageTime(assistantAt));
+    p.asstTimeEl.style.display = "";
     const u = result.usage;
     p.usageMeta.setText(
       u.promptTokens || u.completionTokens

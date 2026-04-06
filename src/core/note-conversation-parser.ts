@@ -1,5 +1,8 @@
 import type { ChatMessage } from "./llm";
 
+/** One line after `### User` / `### Assistant`, written by the plugin; excluded from `content`. */
+const AI_CHAT_AT_LINE = /^<!--\s*ai-chat-at:\s*(.+?)\s*-->\s*$/;
+
 /** Strips a leading YAML `---` … `---` block if present. */
 export function stripYamlFrontmatter(markdown: string): string {
   const t = markdown.trimStart();
@@ -11,6 +14,7 @@ export function stripYamlFrontmatter(markdown: string): string {
 
 /**
  * Parses `### User` / `### Assistant` blocks (same headings as vault append in SPEC).
+ * Optional first line `<!-- ai-chat-at:<ISO> -->` after leading blank lines is stored as `createdAt` and excluded from `content`.
  * Content runs until the next same-level heading or EOF.
  */
 export function parseNoteConversation(markdown: string): ChatMessage[] {
@@ -27,12 +31,28 @@ export function parseNoteConversation(markdown: string): ChatMessage[] {
     }
     const role = hm[1].toLowerCase() === "user" ? "user" : "assistant";
     i += 1;
+    while (i < lines.length && lines[i].trim() === "") {
+      i += 1;
+    }
+    let createdAt: string | undefined;
+    if (i < lines.length) {
+      const tm = lines[i].match(AI_CHAT_AT_LINE);
+      if (tm) {
+        createdAt = tm[1].trim();
+        i += 1;
+        while (i < lines.length && lines[i].trim() === "") {
+          i += 1;
+        }
+      }
+    }
     const contentLines: string[] = [];
     while (i < lines.length && !header.test(lines[i])) {
       contentLines.push(lines[i]);
       i += 1;
     }
-    out.push({ role, content: contentLines.join("\n").trim() });
+    const msg: ChatMessage = { role, content: contentLines.join("\n").trim() };
+    if (createdAt) msg.createdAt = createdAt;
+    out.push(msg);
   }
   return out;
 }

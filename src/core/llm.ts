@@ -5,6 +5,8 @@ export type ChatRole = "system" | "user" | "assistant";
 export interface ChatMessage {
   role: ChatRole;
   content: string;
+  /** ISO 8601 UTC (e.g. from `Date.toISOString()`). Omitted for legacy turns. */
+  createdAt?: string;
 }
 
 export interface ChatOptions {
