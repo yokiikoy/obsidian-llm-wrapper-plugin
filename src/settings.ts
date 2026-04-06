@@ -8,6 +8,8 @@ export interface AIChatSettings {
   geminiApiKey: string;
   systemPrompt: string;
   temperature: number;
+  /** When false (default), no vault reads for [[wikilink]] context. */
+  enableWikilinkContextResolution: boolean;
 }
 
 export const DEFAULT_SETTINGS: AIChatSettings = {
@@ -16,6 +18,7 @@ export const DEFAULT_SETTINGS: AIChatSettings = {
   geminiApiKey: "",
   systemPrompt: "You are a helpful assistant inside Obsidian.",
   temperature: 0.7,
+  enableWikilinkContextResolution: false,
 };
 
 export class AIChatSettingTab extends PluginSettingTab {
@@ -93,6 +96,20 @@ export class AIChatSettingTab extends PluginSettingTab {
           .setDynamicTooltip()
           .onChange(async (v) => {
             this.plugin.settings.temperature = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Enable wikilink context resolution")
+      .setDesc(
+        "When on, [[links]] in your message (depth 1 only) are resolved via the vault and appended to the prompt. When off, no extra file reads."
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.enableWikilinkContextResolution)
+          .onChange(async (v) => {
+            this.plugin.settings.enableWikilinkContextResolution = v;
             await this.plugin.saveSettings();
           })
       );

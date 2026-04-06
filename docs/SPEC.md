@@ -73,6 +73,7 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 | `geminiApiKey` | string | `""` | Gemini 用（空なら送信時エラー） |
 | `systemPrompt` | string | `You are a helpful assistant inside Obsidian.` | システム指示。各リクエストで LLM 層に渡る |
 | `temperature` | number | `0.7` | 0〜2、スライダー刻み 0.05 |
+| `enableWikilinkContextResolution` | boolean | `false` | オン時のみ `[[wikilink]]` を深さ 1 で解決しユーザーターンに連結（§6.6.1） |
 
 設定 UI は英語ラベル（Model, DeepSeek API key, …）。API キー入力は `type="password"`。変更は即 `saveSettings()`。
 
@@ -96,7 +97,7 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 - **ストリーム:** `stream: true`、かつ **`stream_options: { include_usage: true }`**（終端チャンクの `usage` 取得用。プラン ADR 0001 と一致）。
 - **SSE:** `data: {json}` 行をパース。`choices[0].delta.content` → `textChunk`、`delta.reasoning_content` があれば → `reasoningChunk`。終端のルート `usage` を `StreamResult.usage` に。
 - **メッセージ整形:** `messages` 内の `system` は集約し、設定の `systemPrompt` と連結して **単一の `system` メッセージ** として先頭に置く（両方空なら system 行なし）。残りは `user` / `assistant` を API の `messages` にそのまま並べる。
-- **エラー:** 非 2xx はレスポンス JSON の `error.message` があればそれを `Error` に、なければ `DeepSeek HTTP <status>`。ストリーム完了後に本文・reasoning がともに空なら `DeepSeek: empty response`。
+- **エラー:** 非 2xx はレスポンス JSON の `error.message` があればそれを `Error` に、なければ `DeepSeek HTTP <status>`。ストリーム完了後に本文・reasoning がともに空で、かつ `usage` に報告トークンが無い場合は `DeepSeek: empty stream`。**終端のみ `usage` で本文チャンクが無い**ケースは、トークンが報告されていれば `{ content: "", reasoning: "", usage }` として正常完了とみなす。
 
 ### 5.3 Gemini
 
@@ -104,7 +105,7 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 - **system:** 設定 `systemPrompt` と、入力 `messages` 内の `system` を連結し、`systemInstruction.parts[0].text` に渡す（空なら省略）。
 - **会話:** `system` を除き、`user` → `user`、`assistant` → `model`。**連続同一 role は `parts` をマージ**。
 - **generationConfig:** `{ temperature }` のみ。
-- **SSE:** イベント JSON の `candidates[0].content.parts` テキストを累積し、増分のみ `onChunk` に渡す。`usageMetadata` を `StreamResult.usage` に。
+- **SSE:** イベント JSON の `candidates[0].content.parts` テキストを処理する。API は **累積全文**または**純粋な差分**のいずれでも来うるため、空でない `textAggregate` があるときは `piece.startsWith(textAggregate)` で累積とみなし増分だけを `onChunk` に渡し、そうでなければ差分として全文を加算する。先頭チャンクは `textAggregate` が空のため別扱い（`"".startsWith("")` の誤判定を避ける）。`usageMetadata` を `StreamResult.usage` に。
 - **エラー:** 非 2xx は `error.message` または `Gemini HTTP <status>`。ストリーム完了後にテキスト空なら `Gemini: empty response`。
 
 ### 5.4 ファクトリ
@@ -174,22 +175,32 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 - 選択なし: `rawInput` のみ。
 - あり: `rawInput` + 区切り + `**Selection from note:**` + 選択テキスト（Markdown 断片として連結）。
 
+### 6.6.1 Wikilink コンテキスト（[`src/core/wikilink-context.ts`](../src/core/wikilink-context.ts)）
+
+- **前提:** 設定 `enableWikilinkContextResolution` が **オン**のときのみ実行。オフなら **Vault への読み込みは行わない**。
+- **対象:** ユーザー入力 `rawInput` に現れる `[[link]]` / `[[link|alias]]` の **リンク先パス部分のみ**（エイリアスは無視）。**深さ 1**（リンク先ノート本文の中の wikilink は辿らない）。
+- **解決:** `app.metadataCache.getFirstLinkpathDest(linkpath, lockedTarget.path)`。`TFile` に解決できたものだけを `vault.cachedRead` で読む（非同期）。
+- **重複・閉路:** 同一 `path` は 1 回だけ読む（訪問済み `Set`）。
+- **サイズ:** ノートあたり最大 12 000 文字、追記するコンテキスト全体で最大 40 000 文字（実装定数）。超過分は切り捨て、当該ノート末尾に `> [Truncated due to size limit]` を付与。全体上限超過時は残りリンクをスキップし、スキップ用の切り捨て注記を付与。
+- **ユーザーターン:** `buildUserTurnBody(...)` の結果の後に、`## Resolved wikilink context (depth 1)` 以下へ各ノート本文を連結したブロックを付加する。
+
 ### 6.7 送信フロー（`onSend`）
 
 前提チェック後のコア順序:
 
-1. `fullTurns` = 既存 `messages` を `ChatMessage[]` に写したもの + 今ターンの `{ role: "user", content: userContent }`。
-2. `apiPayload` = `limitChatMessagesForApiWindow(fullTurns, DEFAULT_MAX_API_HISTORY_MESSAGES)`。
-3. ユーザー行を履歴に描画（`MarkdownRenderer`）。アシスタント用プレースホルダ行を追加し `pendingStreamRows` に保持。
-4. `setLoading(true)` — Send を隠し Stop を表示、`Waiting for model…`。
-5. `AbortController` を生成し `createLlmClient` → `stream(apiPayload, options, onChunk, signal)` を `await`。チャンクごとにアシスタント行のプレーンテキストを更新（`MarkdownRenderer` は呼ばない）。
-6. **正常完了時:** 累積 `StreamResult` で `MarkdownRenderer` を実行し、**`await appendToLockedNote(userContent, result.content)`**（ノートには **本文のみ**、reasoning は含めない）。
-7. **追記成功後のみ:** `messages` に user → assistant（`result.content`）を `push`、usage 行（`ai-chat-usage-meta`）を表示、入力クリア、`pendingStreamRows` をクリア。
-8. **中止（`AbortError`）:** `Notice` なし。`pendingStreamRows` を DOM から削除。ノート・`messages` は変更しない。入力は保持。
-9. **その他の失敗:** `Notice` にエラー文。`pendingStreamRows` を削除。**入力はクリアしない**。
-10. `finally`: `setLoading(false)`、`abortController` を null。
+1. `baseUserTurn` = `buildUserTurnBody(rawInput, selection)`。設定がオンなら [`buildWikilinkContextAppendix`](../src/core/wikilink-context.ts) で付加し、これを `userContent` とする。
+2. `fullTurns` = 既存 `messages` を `ChatMessage[]` に写したもの + 今ターンの `{ role: "user", content: userContent }`。
+3. `apiPayload` = `limitChatMessagesForApiWindow(fullTurns, DEFAULT_MAX_API_HISTORY_MESSAGES)`。
+4. ユーザー行を履歴に描画（`MarkdownRenderer`）。アシスタント用プレースホルダ行を追加し `pendingStreamRows` に保持。
+5. `setLoading(true)` — Send を隠し Stop を表示、`Waiting for model…`。
+6. `AbortController` を生成し `createLlmClient` → `stream(apiPayload, options, onChunk, signal)` を `await`。チャンクごとにアシスタント行のプレーンテキストを更新（`MarkdownRenderer` は呼ばない）。
+7. **正常完了時:** 累積 `StreamResult` で `MarkdownRenderer` を実行し、その後 **`appendToLockedNote(userContent, result.content)` を try。** `append` が失敗した場合は **`removePendingStreamRows()`** で当ターンのユーザ/アシスタント仮行を DOM から削除し、例外を再送出する（ノート・`messages` は未更新のまま）。成功時のみ続行（ノートには **本文のみ**、reasoning は含めない）。
+8. **追記成功後のみ:** `messages` に user → assistant（`result.content`）を `push`、usage 行（`ai-chat-usage-meta`）を表示、入力クリア、`pendingStreamRows` をクリア。
+9. **中止（`AbortError`）:** `Notice` なし。`pendingStreamRows` を DOM から削除。ノート・`messages` は変更しない。入力は保持。
+10. **その他の失敗:** `Notice` にエラー文。`pendingStreamRows` を削除。**入力はクリアしない**。
+11. `finally`: `setLoading(false)`、`abortController` を null。
 
-**原子性:** ノート追記に失敗した場合、UI 上の履歴は当ターンを増やさない（ファイルとパネルの不整合を避ける）。ストリームは完了していても追記失敗なら `messages` に載せない。
+**原子性:** ノート追記に失敗した場合、UI 上の履歴は当ターンを増やさず、**仮 DOM もロールバック**する（ファイル・メモリ・表示の整合）。ストリームは完了していても追記失敗なら `messages` に載せない。
 
 ### 6.8 Stop / Clear との関係
 
@@ -266,7 +277,7 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 - **ネットワーク:** `fetch` の自動タイムアウト・自動リトライは未実装。**ユーザー中止**（Stop）は `AbortSignal` で実装済み。
 - **usage:** プロバイダが報告しない場合は `0` とし、UI は「(not reported)」表示。
 - **同一 role の system:** DeepSeek 側は複数 system をマージ。Gemini は `systemInstruction` 1 本にマージ。
-- **ノート追記成功後の UI 描画:** `appendRenderedMessage`（`MarkdownRenderer`）が例外を出した場合、ノートには書き込み済みで UI が一部未更新となる余地あり（追記失敗時の UI 先行はしない）。
+- **MarkdownRenderer と追記の順序:** アシスタント行は先に `MarkdownRenderer` で確定し、その後 `appendToLockedNote`。**追記失敗時**は `pendingStreamRows` を削除してユーザ/アシスタント仮行をロールバックする。**レンダラが `append` より前に失敗**した場合は従来どおり仮行削除パスに入り、ノートは未更新。
 
 ---
 
@@ -278,5 +289,6 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 | 2026-04-06 | 追記: API スライディング・ウィンドウ、`onSend` のノート先行成功後のみ UI 更新、`formatNoteBlock` 先頭 `\n\n` 明示 | `97ac5f8b…` |
 | 2026-04-06 | yokii-dev-workflow 遵守用: `docs/RECORDS.md`、`docs/decisions/`（ADR 0001）、`DISCUSSION.md`、`EVAL.md` | （本変更のコミット SHA を追記） |
 | 2026-04-06 | Phase A: `LlmClient.stream`（DeepSeek/Gemini SSE）、Stop / `AbortController`、プレーン→Markdown 確定描画、追記成功後のみ `messages` 確定、usage 行 | `00eb3f85bb4beceaedf5e034a2d5b33850c48043` |
+| 2026-04-06 | Phase B 相当: Wikilink コンテキスト（opt-in）、append 失敗時 DOM ロールバック、Gemini/DeepSeek パース調整、ADR `finish_reason` 補足、`docs/archive/SPEC.consulting.md` へ旧コンサル SPEC 退避 | （本変更のコミット SHA を追記） |
 
 記録運用は [`docs/RECORDS.md`](RECORDS.md) を参照。

@@ -16,6 +16,8 @@ Accepted
 2. **その後:** P3（Wikilink コンテキスト解決）を実装する。
 3. **採用しない順序:** P3 を P1+P2 より先に実装する（ペイロード増大 × ブロッキングの相乗を避けるため）。
 
+**Phase A の UI / 型スコープ（補足）:** P2 の記述に `finish_reason` が含まれるが、**Phase A の `StreamResult` および UI には `finish_reason` を含めない**。必要になれば後続フェーズで拡張する。Phase A では **`usage` と reasoning の可視化**に絞る。
+
 ## Consequences
 
 ### 良い点

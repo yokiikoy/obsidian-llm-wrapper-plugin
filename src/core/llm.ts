@@ -196,6 +196,9 @@ async function deepSeekStream(
   }
 
   if (!content && !reasoning) {
+    if (usage.promptTokens > 0 || usage.completionTokens > 0) {
+      return { content: "", reasoning: "", usage };
+    }
     throw new Error("DeepSeek: empty stream");
   }
   return { content, reasoning, usage };
@@ -293,11 +296,17 @@ async function geminiStream(
     if (parts?.length) {
       const piece = parts.map((p) => p.text ?? "").join("");
       if (!piece) return;
-      let delta = piece;
-      if (piece.startsWith(textAggregate)) {
+      // Cumulative full-text (growing prefix) vs pure delta chunks: empty aggregate is a special case because
+      // in JS any string starts with "", which would swallow the first delta incorrectly.
+      let delta: string;
+      if (textAggregate.length === 0) {
+        delta = piece;
+        textAggregate = piece;
+      } else if (piece.startsWith(textAggregate)) {
         delta = piece.slice(textAggregate.length);
         textAggregate = piece;
       } else {
+        delta = piece;
         textAggregate += piece;
       }
       if (delta) {

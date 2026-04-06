@@ -15,6 +15,10 @@ import {
   limitChatMessagesForApiWindow,
   type ChatMessage,
 } from "./core/llm";
+import {
+  buildWikilinkContextAppendix,
+  wikilinkContextOptionsFromSettings,
+} from "./core/wikilink-context";
 
 export const VIEW_TYPE = "obsidian-ai-chat-view";
 
@@ -246,7 +250,14 @@ export class AIChatView extends ItemView {
     this.lockedTarget = file;
 
     const selection = this.getSelectionContext();
-    const userContent = this.buildUserTurnBody(rawInput, selection);
+    const baseUserTurn = this.buildUserTurnBody(rawInput, selection);
+    const wikilinkAppendix = await buildWikilinkContextAppendix(
+      this.app,
+      rawInput,
+      file.path,
+      wikilinkContextOptionsFromSettings(this.plugin.settings.enableWikilinkContextResolution)
+    );
+    const userContent = wikilinkAppendix ? `${baseUserTurn}${wikilinkAppendix}` : baseUserTurn;
 
     const client = createLlmClient({
       provider: this.plugin.settings.provider,
@@ -329,7 +340,12 @@ export class AIChatView extends ItemView {
         this.mdRoot
       );
 
-      await this.appendToLockedNote(userContent, result.content);
+      try {
+        await this.appendToLockedNote(userContent, result.content);
+      } catch (appendErr) {
+        this.removePendingStreamRows();
+        throw appendErr;
+      }
 
       this.messages.push({ role: "user", content: userContent });
       this.messages.push({ role: "assistant", content: result.content });
