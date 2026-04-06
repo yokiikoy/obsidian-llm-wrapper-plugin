@@ -34,10 +34,20 @@ export interface LlmClient {
   ): Promise<StreamResult>;
 }
 
+/** DeepSeek API `model` field ([docs](https://api-docs.deepseek.com/)). */
+export type DeepseekModelId = "deepseek-chat" | "deepseek-reasoner";
+
+/** Gemini model id for `streamGenerateContent` path segment. */
+export type GeminiModelId = "gemini-1.5-flash" | "gemini-1.5-pro";
+
 export interface LlmCredentials {
   provider: LlmProviderId;
   deepseekApiKey: string;
   geminiApiKey: string;
+  /** Defaults to `deepseek-chat` when omitted. */
+  deepseekModel?: DeepseekModelId;
+  /** Defaults to `gemini-1.5-flash` when omitted. */
+  geminiModel?: GeminiModelId;
 }
 
 /**
@@ -114,8 +124,10 @@ export function isAbortError(e: unknown): boolean {
 }
 
 const DEEPSEEK_URL = "https://api.deepseek.com/chat/completions";
-const GEMINI_MODEL = "gemini-1.5-flash";
-const GEMINI_STREAM_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:streamGenerateContent`;
+
+function geminiStreamUrl(modelId: string): string {
+  return `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:streamGenerateContent`;
+}
 
 type DeepSeekDelta = {
   content?: string;
@@ -133,7 +145,8 @@ type DeepSeekSseJson = {
 
 function buildDeepSeekPayload(
   messages: ChatMessage[],
-  options: ChatOptions
+  options: ChatOptions,
+  modelId: string
 ): Record<string, unknown> {
   const systemFromMessages = messages
     .filter((m) => m.role === "system")
@@ -145,7 +158,7 @@ function buildDeepSeekPayload(
     undefined;
 
   return {
-    model: "deepseek-chat",
+    model: modelId,
     messages: [
       ...(system ? [{ role: "system", content: system }] : []),
       ...bodyMessages.map((m) => ({ role: m.role, content: m.content })),
@@ -159,11 +172,12 @@ function buildDeepSeekPayload(
 async function deepSeekStream(
   messages: ChatMessage[],
   apiKey: string,
+  modelId: string,
   options: ChatOptions,
   onChunk: ChunkCallback,
   signal: AbortSignal
 ): Promise<StreamResult> {
-  const payload = buildDeepSeekPayload(messages, options);
+  const payload = buildDeepSeekPayload(messages, options, modelId);
   const res = await fetch(DEEPSEEK_URL, {
     method: "POST",
     headers: {
@@ -294,11 +308,12 @@ type GeminiSseJson = {
 async function geminiStream(
   messages: ChatMessage[],
   apiKey: string,
+  modelId: string,
   options: ChatOptions,
   onChunk: ChunkCallback,
   signal: AbortSignal
 ): Promise<StreamResult> {
-  const url = `${GEMINI_STREAM_URL}?alt=sse&key=${encodeURIComponent(apiKey)}`;
+  const url = `${geminiStreamUrl(modelId)}?alt=sse&key=${encodeURIComponent(apiKey)}`;
   const body = buildGeminiBody(messages, options);
 
   const res = await fetch(url, {
@@ -399,7 +414,8 @@ export function createLlmClient(creds: LlmCredentials): LlmClient {
       stream(messages, options, onChunk, signal) {
         const key = creds.deepseekApiKey.trim();
         if (!key) return Promise.reject(new Error("DeepSeek API key is empty"));
-        return deepSeekStream(messages, key, options, onChunk, signal);
+        const modelId = creds.deepseekModel ?? "deepseek-chat";
+        return deepSeekStream(messages, key, modelId, options, onChunk, signal);
       },
     };
   }
@@ -407,7 +423,8 @@ export function createLlmClient(creds: LlmCredentials): LlmClient {
     stream(messages, options, onChunk, signal) {
       const key = creds.geminiApiKey.trim();
       if (!key) return Promise.reject(new Error("Gemini API key is empty"));
-      return geminiStream(messages, key, options, onChunk, signal);
+      const modelId = creds.geminiModel ?? "gemini-1.5-flash";
+      return geminiStream(messages, key, modelId, options, onChunk, signal);
     },
   };
 }

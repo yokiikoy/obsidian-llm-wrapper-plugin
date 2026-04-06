@@ -16,9 +16,15 @@ Obsidian 内で LLM とチャットし、**会話内容を Vault 内の Markdown
 
 - ツール呼び出し、画像等マルチモーダル
 - 通信失敗時の自動リトライ、明示的なタイムアウト（`AbortController` によるユーザー中止は実装済み）
-- ノート側の手編集をチャット履歴へ反映（**単方向: プラグイン → ノートのみ**）
-- ノート上の過去ログからチャット UI 状態を自動復元
-- モデル名のユーザー設定（コード内定数）
+- ノート側の手編集をチャット履歴へ**自動**反映（**単方向: プラグイン → ノートが基本**。手動「Load note」は §5.8）
+- ファイルを開いただけでの会話自動復元（手動ボタンのみ）
+- 推論テキストの Vault 追記（本文のみ。ADR 0002）
+
+**Phase E/G/D（ADR 0002）で追加したこと:**
+
+- プロバイダ別 **API モデル ID**（設定＋View ツールバー）。チャット内の **推論表示**は設定でオフ可能（Vault には書かない）。
+- **Load note:** ロック中ノートの `### User` / `### Assistant` から `ChatSession` へ再水和（推定トークンが安全上限超なら拒否）。
+- **送信前 URL フェッチ:** 入力中の http(s) URL を検出し、`requestUrl` で本文を取り込んでユーザーターンに連結（§5.7）。
 
 ---
 
@@ -74,6 +80,9 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 | `systemPrompt` | string | `You are a helpful assistant inside Obsidian.` | システム指示。各リクエストで LLM 層に渡る |
 | `temperature` | number | `0.7` | 0〜2、スライダー刻み 0.05 |
 | `enableWikilinkContextResolution` | boolean | `false` | オン時のみ `[[wikilink]]` を深さ 1 で解決しユーザーターンに連結（§6.6.1） |
+| `deepseekModel` | `"deepseek-chat" \| "deepseek-reasoner"` | `"deepseek-chat"` | DeepSeek API の `model` フィールド |
+| `geminiModel` | `"gemini-1.5-flash" \| "gemini-1.5-pro"` | `"gemini-1.5-flash"` | Gemini ストリームエンドポイントのモデル名 |
+| `showReasoningInChat` | boolean | `true` | オフ時はチャット UI に推論を表示しない（Vault 追記は常に本文のみ） |
 
 設定 UI は英語ラベル（Model, DeepSeek API key, …）。API キー入力は `type="password"`。変更は即 `saveSettings()`。
 
@@ -93,7 +102,7 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 
 - **HTTP:** `POST https://api.deepseek.com/chat/completions`
 - **認証:** `Authorization: Bearer <apiKey>`
-- **モデル（固定）:** `deepseek-chat`
+- **モデル:** 設定 `deepseekModel`（既定 `deepseek-chat`）。`deepseek-reasoner` も可。
 - **ストリーム:** `stream: true`、かつ **`stream_options: { include_usage: true }`**（終端チャンクの `usage` 取得用。プラン ADR 0001 と一致）。
 - **SSE:** `data: {json}` 行をパース。`choices[0].delta.content` → `textChunk`、`delta.reasoning_content` があれば → `reasoningChunk`。終端のルート `usage` を `StreamResult.usage` に。
 - **メッセージ整形:** `messages` 内の `system` は集約し、設定の `systemPrompt` と連結して **単一の `system` メッセージ** として先頭に置く（両方空なら system 行なし）。残りは `user` / `assistant` を API の `messages` にそのまま並べる。
@@ -101,7 +110,7 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 
 ### 5.3 Gemini
 
-- **HTTP:** `POST https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent?alt=sse&key=<apiKey>`（**モデル名は固定**、**SSE**）
+- **HTTP:** `POST https://generativelanguage.googleapis.com/v1beta/models/<geminiModel>:streamGenerateContent?alt=sse&key=<apiKey>`（`<geminiModel>` は設定、既定 `gemini-1.5-flash`、**SSE**）
 - **system:** 設定 `systemPrompt` と、入力 `messages` 内の `system` を連結し、`systemInstruction.parts[0].text` に渡す（空なら省略）。
 - **会話:** `system` を除き、`user` → `user`、`assistant` → `model`。**連続同一 role は `parts` をマージ**。
 - **generationConfig:** `{ temperature }` のみ。
@@ -127,6 +136,18 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 - **`ChatSession`:** 会話履歴（`ChatMessage[]`）、`lockedTarget`（`TFile | null`）、送信中フラグ（`_inFlight`）、`AbortController` を保持する。**送信・トークン判定・LLM `stream`・Vault 追記**はここで行う。`VaultAdapter`（`resolveFile` / `appendToFile` / `buildWikilinkContext`）を**注入**し、本番は View 内の `createVaultAdapter(app)` が `App` を束ねる（wikilink の on/off は `ChatSession` が `buildWikilinkContext` に渡す `enabled` で制御）。
 - **`ChatSessionDelegate`:** UI 更新用コールバック。`onSendStarting` で仮 DOM 行、`onStreamChunk` でプレーン累積、**ストリーム完了後・追記前**に `onStreamFinished`（アシスタントの Markdown 確定描画）、追記成功後に `onTurnComplete`（usage 行・入力クリア）、失敗・中止時に `onTurnRolledBack`、読み込み表示に `onLoadingChanged`、Truncate 後に `onMessagesChanged`、セッションクリア時に `onSessionCleared`、トークン超過時に `promptTokenLimitChoice`（Modal）、Notice に `showNotice`。
 - **単一の状態源:** 履歴とロックは **`ChatSession` のみ**が保持し、View は `session.messages` / `session.lockedTarget` / `session.inFlight` を参照する。
+- **`hydrateFromNoteMarkdown`:** ノート全文を [`parseNoteConversation`](../src/core/note-conversation-parser.ts) でパースし `_messages` を置換。`estimatePromptTokens` が `getInputTokenLimitForProvider` を超える場合は **拒否**（Notice 用メッセージを返す）。
+
+### 5.7 送信前 URL 取り込み（[`src/core/url-fetch.ts`](../src/core/url-fetch.ts)）
+
+- ユーザー入力から **http(s) URL** を抽出（重複除去、最大 5 件）。
+- **`requestUrl`** で順に取得し、`DOMParser` で本文をプレーンテキスト化（`script` / `style` 除去、長さ上限あり）。失敗時は Notice、他 URL は続行。
+- 連結は `buildUserTurnBody` **より前**（wikilink 解決の `rawInput` は **元の入力**のまま）。
+
+### 5.8 ノートからの会話再水和（[`src/core/note-conversation-parser.ts`](../src/core/note-conversation-parser.ts)）
+
+- 見出しは **`### User`** / **`### Assistant`** のみ（Vault 追記と同一）。先頭 YAML `---` … `---` はスキップしてからパース。
+- UI は View の **Load note**（ロック済みノートを `vault.read`）。成功時に `hydrateFromNoteMarkdown`。
 
 ---
 
@@ -143,7 +164,7 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 1. **Target ブロック**（`ai-chat-target`）— **ノート選択**（`select.ai-chat-target-select`）、**状態行**（`ai-chat-target-detail`）、**推定トークン行**（`ai-chat-token-estimate`）— `ChatSession.estimateCurrentTokens`（内部で `estimatePromptTokens`）により **履歴＋システム**、入力欄に文字があるときは **ドラフトを仮の user メッセージとして加算**（wikilink 追記は含めない）。表示形式: `Estimated prompt: ~N / L tokens`、ドラフトあり時は `(incl. draft input)` を付与。入力は 200ms デバウンスで更新。
 2. **履歴**（`ai-chat-history`）— 縦フレックス。各メッセージは `ai-chat-msg` + ロール修飾子 `ai-chat-msg-user`（右寄せ）または `ai-chat-msg-assistant`（左寄せ）。ロールラベル（`ai-chat-msg-role`）の下に **吹き出し内側** `ai-chat-msg-bubble-inner`（`overflow-x: auto`、`word-break` 系でコードブロック・テーブルが横幅を突き破らない）。確定済み本文は `MarkdownRenderer.render`、ストリーム中のアシスタントのみプレーンテキスト → 完了後に再描画。
 3. **入力**（`textarea.ai-chat-input`）— 複数行。**Ctrl+Enter / Cmd+Enter**（および **Mod+Enter**：macOS では Cmd、それ以外では Ctrl）で送信（通常 Enter は改行）。**IME 変換中**（`isComposing`）は送信しない。Obsidian はキーを DOM のみで拾えないことがあるため、**`View.scope`（`new Scope(this.app.scope)`）に `Scope.register`** で `Mod` / `Ctrl` / `Meta` と `Enter` / `NumpadEnter` を登録し、**フォーカスが入力欄のときだけ** `onSend` する（ハンドラは `false` を返して既定処理を抑止）。
-4. **ツールバー:** **Send**（`mod-cta`）、**Stop**（`mod-warning`、送信中のみ表示）、**Clear session**、**Usage**、読み込み文言 `Waiting for model…`（`ai-chat-loading`）。
+4. **ツールバー:** **API model**（`select`、現在のプロバイダに応じた `deepseekModel` / `geminiModel`）、**Load note**（ロック中ノートから §5.8 再水和）、**Send**（`mod-cta`）、**Stop**（`mod-warning`、送信中のみ表示）、**Clear session**、**Usage**、読み込み文言 `Waiting for model…`（`ai-chat-loading`）。設定タブでプロバイダを変えたあと View を開き直すまでツールバーのモデル一覧が古い場合がある。
 
 ### 6.3 状態（インスタンスフィールド）
 
@@ -201,7 +222,7 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 
 View 側の前提（ターゲット未ロックならロック、選択コンテキスト取得）のあと **`session.send(rawInput, selection)`** が以下を実行する。
 
-1. `baseUserTurn` = `buildUserTurnBody` 相当（セッション内）。設定がオンなら `VaultAdapter.buildWikilinkContext` で付加し、これを `userContent` とする。
+1. **URL 取り込み（§5.7）** — `rawInput` に対し `fetchUrlsAppendix`（進捗は `showNotice`）。続いて `baseUserTurn` = `buildUserTurnBody(rawInputWithUrls, selection)`。設定がオンなら `VaultAdapter.buildWikilinkContext`（**元の** `rawInput`）で付加し、これを `userContent` とする。
 2. `fullTurns` = 既存 `session.messages` を `ChatMessage[]` に写したもの + 今ターンの `{ role: "user", content: userContent }`。
 3. **トークン判定（§5.5）:** `estimatePromptTokens(fullTurns, …)` とプロバイダ別上限を比較。
    - **上限内:** `apiPayload` = `trimLeadingAssistantRun(fullTurns)`。空なら Notice して終了。
@@ -289,7 +310,7 @@ View 側の前提（ターゲット未ロックならロック、選択コンテ
 
 ## 11. 既知の制限・リスク（仕様としての注記）
 
-- **コンテキスト長:** API にはスライディング・ウィンドウ（最大 10 メッセージ）のみ送信。それでも長文ターンや累積でトークン上限に達し得る。
+- **コンテキスト長:** 送信ペイロードはトークン見積りと `trimLeadingAssistantRun`（§5.5）。長文ターンや累積でトークン上限に達し得る。
 - **秘密情報:** API キーは設定 JSON に平文。
 - **ネットワーク:** `fetch` の自動タイムアウト・自動リトライは未実装。**ユーザー中止**（Stop）は `AbortSignal` で実装済み。
 - **usage:** プロバイダが報告しない場合は `0` とし、UI は「(not reported)」表示。
@@ -314,5 +335,6 @@ View 側の前提（ターゲット未ロックならロック、選択コンテ
 | 2026-04-06 | トークンベース・コンテキスト: `estimateTokens` / `estimatePromptTokens`、プロバイダ別安全上限、`trimLeadingAssistantRun`、送信前超過時 `TokenLimitModal`（Truncate / Clear / Cancel）、件数 10 のサイレント切り捨て廃止 |  |
 | 2026-04-06 | **v1.2.0** 確定: 画面上の推定トークン行（`ai-chat-token-estimate`）、レビュー／トークン機能レポート、`docs/AGENT_HANDOFF.md`（次エージェント引き継ぎ） |  |
 | 2026-04-06 | リファクタ: [`src/core/chat-session.ts`](../src/core/chat-session.ts) に送信・トークン・ストリーム・追記を集約、`VaultAdapter` 注入、`ChatSessionDelegate` で View と連携。振る舞いは v1.2.0 と同一を意図 |  |
+| 2026-04-06 | Phase E/G/D（ADR 0002）: プロバイダ別モデル ID、推論チャット表示トグル、ノート再水和（`parseNoteConversation` / `hydrateFromNoteMarkdown`）、送信前 URL フェッチ（`url-fetch.ts`） |  |
 
 記録運用は [`docs/RECORDS.md`](RECORDS.md) を参照。

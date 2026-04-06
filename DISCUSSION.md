@@ -15,6 +15,7 @@
 |------|----------|------|
 | 2026-04-06 | ロードマップ着手順（P1+P2 vs P3） | [ADR 0001](docs/decisions/0001-streaming-and-metadata-before-wikilink-context.md) |
 | 2026-04-06 | View と `ChatSession` の責務分離 | [`docs/SPEC.md`](docs/SPEC.md) §5.6（実装コミット例: `fff7e5d`） |
+| 2026-04-06 | Phase E→G→D（モデル・再水和・URL） | [ADR 0002](docs/decisions/0002-phase-egd-model-hydration-url.md) |
 
 ## メモ（自由記述）
 

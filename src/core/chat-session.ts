@@ -14,6 +14,8 @@ import {
   type LlmProviderId,
   type StreamResult,
 } from "./llm";
+import { parseNoteConversation } from "./note-conversation-parser";
+import { fetchUrlsAppendix } from "./url-fetch";
 
 export type CreateLlmClientFn = (creds: LlmCredentials) => LlmClient;
 
@@ -130,6 +132,28 @@ export class ChatSession {
     this.delegate.onSessionCleared();
   }
 
+  /**
+   * Replaces in-memory messages from a note body using `### User` / `### Assistant` blocks.
+   * Refuses if estimated prompt tokens exceed the provider safe limit (ADR 0002).
+   */
+  hydrateFromNoteMarkdown(markdown: string): { ok: true } | { ok: false; reason: string } {
+    const parsed = parseNoteConversation(markdown);
+    const settings = this.getSettings();
+    const provider = settings.provider as LlmProviderId;
+    const chatOptions = this.chatOptions();
+    const est = estimatePromptTokens(parsed, chatOptions, provider);
+    const limit = getInputTokenLimitForProvider(provider);
+    if (est > limit) {
+      return {
+        ok: false,
+        reason: `Estimated prompt ~${est.toLocaleString()} tokens exceeds safe limit ${limit.toLocaleString()}.`,
+      };
+    }
+    this._messages = parsed.filter((m) => m.role === "user" || m.role === "assistant");
+    this.delegate.onMessagesChanged();
+    return { ok: true };
+  }
+
   private resolveLockedFile(): TFile | null {
     if (!this._lockedTarget) return null;
     return this.vault.resolveFile(this._lockedTarget.path);
@@ -154,8 +178,10 @@ export class ChatSession {
     }
     this._lockedTarget = file;
 
-    const baseUserTurn = buildUserTurnBody(rawInput, selectionContext);
     const settings = this.getSettings();
+    const urlAppendix = await fetchUrlsAppendix(rawInput, (msg) => this.delegate.showNotice(msg));
+    const rawForTurn = urlAppendix ? `${rawInput}${urlAppendix}` : rawInput;
+    const baseUserTurn = buildUserTurnBody(rawForTurn, selectionContext);
     const wikilinkAppendix = await this.vault.buildWikilinkContext(
       rawInput,
       file.path,
@@ -167,6 +193,8 @@ export class ChatSession {
       provider: settings.provider,
       deepseekApiKey: settings.deepseekApiKey,
       geminiApiKey: settings.geminiApiKey,
+      deepseekModel: settings.deepseekModel,
+      geminiModel: settings.geminiModel,
     });
 
     const provider = settings.provider as LlmProviderId;

@@ -21,3 +21,4 @@ git log -1 --format=%H -- docs/decisions/NNNN-your-title.md
 | ADR | 概要 |
 |-----|------|
 | [0001](0001-streaming-and-metadata-before-wikilink-context.md) | ロードマップ: P1+P2（ストリーミング＋メタデータ）優先、その後 P3（Wikilink コンテキスト） |
+| [0002](0002-phase-egd-model-hydration-url.md) | Phase E/G/D: モデル ID 設定・履歴再水和・URL フェッチのスコープ |

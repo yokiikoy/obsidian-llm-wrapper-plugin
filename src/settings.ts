@@ -1,24 +1,33 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type AIChatPlugin from "./main";
-import type { LlmProviderId } from "./core/llm";
+import type { DeepseekModelId, GeminiModelId, LlmProviderId } from "./core/llm";
 
 export interface AIChatSettings {
   provider: LlmProviderId;
   deepseekApiKey: string;
   geminiApiKey: string;
+  /** DeepSeek `model` API field. */
+  deepseekModel: DeepseekModelId;
+  /** Gemini model id in the stream endpoint. */
+  geminiModel: GeminiModelId;
   systemPrompt: string;
   temperature: number;
   /** When false (default), no vault reads for [[wikilink]] context. */
   enableWikilinkContextResolution: boolean;
+  /** When true (default), stream reasoning into the chat UI; never written to the vault note. */
+  showReasoningInChat: boolean;
 }
 
 export const DEFAULT_SETTINGS: AIChatSettings = {
   provider: "deepseek",
   deepseekApiKey: "",
   geminiApiKey: "",
+  deepseekModel: "deepseek-chat",
+  geminiModel: "gemini-1.5-flash",
   systemPrompt: "You are a helpful assistant inside Obsidian.",
   temperature: 0.7,
   enableWikilinkContextResolution: false,
+  showReasoningInChat: true,
 };
 
 export class AIChatSettingTab extends PluginSettingTab {
@@ -46,6 +55,46 @@ export class AIChatSettingTab extends PluginSettingTab {
             this.plugin.settings.provider = value as LlmProviderId;
             await this.plugin.saveSettings();
           })
+      );
+
+    new Setting(containerEl)
+      .setName("DeepSeek model")
+      .setDesc("API model id for DeepSeek requests.")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("deepseek-chat", "deepseek-chat")
+          .addOption("deepseek-reasoner", "deepseek-reasoner")
+          .setValue(this.plugin.settings.deepseekModel)
+          .onChange(async (value) => {
+            this.plugin.settings.deepseekModel = value as DeepseekModelId;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Gemini model")
+      .setDesc("Model name in the Google AI stream endpoint.")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("gemini-1.5-flash", "gemini-1.5-flash")
+          .addOption("gemini-1.5-pro", "gemini-1.5-pro")
+          .setValue(this.plugin.settings.geminiModel)
+          .onChange(async (value) => {
+            this.plugin.settings.geminiModel = value as GeminiModelId;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Show reasoning in chat")
+      .setDesc(
+        "When on, models that emit chain-of-thought show it in the chat (collapsible). Never written to the vault note."
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.showReasoningInChat).onChange(async (v) => {
+          this.plugin.settings.showReasoningInChat = v;
+          await this.plugin.saveSettings();
+        })
       );
 
     new Setting(containerEl)

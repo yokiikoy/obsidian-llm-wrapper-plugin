@@ -20,6 +20,8 @@
 | LLM クライアント（ストリーム） | `src/core/llm.ts`              | `createLlmClient` → DeepSeek / Gemini の `stream` |
 | ウィキリンク抽出（純粋）      | `src/core/wikilink-context.ts` | `extractWikilinkLinkpaths`                       |
 | セッション（Vault 注入）      | `src/core/chat-session.ts`     | `ChatSession.send`、トークン超過・Truncate、Abort / 追記失敗 / ファイル消失時のロールバック |
+| ノート会話パース              | `src/core/note-conversation-parser.ts` | `### User` / `### Assistant`、フロントマター除去 |
+| URL 抽出（ネットワークなし）   | `src/core/url-fetch.ts`        | `extractUrls` のみ（`requestUrl` はテスト外） |
 
 
 ### 1.3 テスト対象外（Out of scope）
@@ -202,8 +204,10 @@
 | `llm.test.ts`              | 12        | メッセージ窓 + Abort 判定       |
 | `llm.stream.test.ts`       | 8         | `createLlmClient` ストリーム |
 | `wikilink-context.test.ts` | 5         | ウィキリンク抽出                |
-| `chat-session.test.ts`     | 6         | `ChatSession` + Vault モック |
-| **合計**                     | **31**    | —                       |
+| `chat-session.test.ts`     | 6         | `ChatSession` + Vault モック（`url-fetch` はモック） |
+| `note-conversation-parser.test.ts` | 3 | 見出しパース |
+| `url-fetch.test.ts`        | 2         | `extractUrls` |
+| **合計**                     | **36**    | —                       |
 
 
 ---
@@ -226,5 +230,6 @@
 | 2026-04-06 | 初版: 既存 `*.test.ts` と `vitest.config.ts` に基づき記述 |
 | 2026-04-06 | `chat-session.test.ts` と件数サマリ（計 28）を追記 |
 | 2026-04-06 | CS4–CS6（Truncate / append 失敗 / ファイル消失）と件数サマリ（計 31）を追記 |
+| 2026-04-06 | `note-conversation-parser` / `url-fetch`（extractUrls）と件数サマリ（計 36）を追記 |
 
 

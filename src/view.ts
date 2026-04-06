@@ -73,6 +73,8 @@ export class AIChatView extends ItemView implements ChatSessionDelegate {
   private stopBtn!: HTMLButtonElement;
   private clearBtn!: HTMLButtonElement;
   private usageBtn!: HTMLButtonElement;
+  private loadFromNoteBtn!: HTMLButtonElement;
+  private modelSelectEl!: HTMLSelectElement;
   private loadingEl!: HTMLSpanElement;
   private targetEl!: HTMLSpanElement;
   private targetSelectEl!: HTMLSelectElement;
@@ -146,6 +148,17 @@ export class AIChatView extends ItemView implements ChatSessionDelegate {
     });
 
     const toolbar = root.createDiv({ cls: "ai-chat-toolbar" });
+    const modelRow = toolbar.createDiv({ cls: "ai-chat-model-row" });
+    modelRow.createSpan({ text: "API model: ", cls: "ai-chat-target-pick-label" });
+    this.modelSelectEl = modelRow.createEl("select", { cls: "ai-chat-model-select" });
+    this.syncModelToolbar();
+    this.modelSelectEl.addEventListener("change", () => void this.onModelToolbarChange());
+    this.loadFromNoteBtn = toolbar.createEl("button", {
+      text: "Load note",
+      attr: { title: "Load ### User / ### Assistant history from the locked note" },
+    });
+    this.loadFromNoteBtn.addEventListener("click", () => void this.onLoadNoteHistory());
+
     this.sendBtn = toolbar.createEl("button", { text: "Send", cls: "mod-cta" });
     this.stopBtn = toolbar.createEl("button", { text: "Stop", cls: "mod-warning" });
     this.stopBtn.style.display = "none";
@@ -287,6 +300,52 @@ export class AIChatView extends ItemView implements ChatSessionDelegate {
     window.open(url, "_blank", "noopener,noreferrer");
   }
 
+  private syncModelToolbar(): void {
+    const p = this.plugin.settings.provider;
+    const sel = this.modelSelectEl;
+    sel.empty();
+    if (p === "deepseek") {
+      sel.createEl("option", { value: "deepseek-chat", text: "deepseek-chat" });
+      sel.createEl("option", { value: "deepseek-reasoner", text: "deepseek-reasoner" });
+      sel.value = this.plugin.settings.deepseekModel;
+    } else {
+      sel.createEl("option", { value: "gemini-1.5-flash", text: "gemini-1.5-flash" });
+      sel.createEl("option", { value: "gemini-1.5-pro", text: "gemini-1.5-pro" });
+      sel.value = this.plugin.settings.geminiModel;
+    }
+  }
+
+  private async onModelToolbarChange(): Promise<void> {
+    const v = this.modelSelectEl.value;
+    if (this.plugin.settings.provider === "deepseek") {
+      this.plugin.settings.deepseekModel = v as typeof this.plugin.settings.deepseekModel;
+    } else {
+      this.plugin.settings.geminiModel = v as typeof this.plugin.settings.geminiModel;
+    }
+    await this.plugin.saveSettings();
+  }
+
+  private async onLoadNoteHistory(): Promise<void> {
+    const t = this.session.lockedTarget;
+    if (!t) {
+      new Notice("AI Chat: lock a note first (send once to lock the target).");
+      return;
+    }
+    let text: string;
+    try {
+      text = await this.app.vault.read(t);
+    } catch (e) {
+      new Notice(`AI Chat: could not read note: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    const result = this.session.hydrateFromNoteMarkdown(text);
+    if (!result.ok) {
+      new Notice(`AI Chat: ${result.reason}`);
+      return;
+    }
+    new Notice("AI Chat: loaded conversation from the locked note.");
+  }
+
   private getSelectionContext(): string {
     const active = this.app.workspace.getActiveFile();
     if (!this.session.lockedTarget || !active || active.path !== this.session.lockedTarget.path) {
@@ -380,13 +439,15 @@ export class AIChatView extends ItemView implements ChatSessionDelegate {
   onStreamChunk(textChunk: string, reasoningChunk: string): void {
     const p = this.pendingStreamRows;
     if (!p) return;
+    const showR = this.plugin.settings.showReasoningInChat;
+    const rc = showR ? reasoningChunk : "";
     if (textChunk) {
       const prev = p.plainLayer.textContent ?? "";
       p.plainLayer.textContent = prev + textChunk;
     }
-    if (reasoningChunk) {
+    if (rc) {
       const prevR = p.reasonPlain.textContent ?? "";
-      p.reasonPlain.textContent = prevR + reasoningChunk;
+      p.reasonPlain.textContent = prevR + rc;
       p.reasonPlain.style.display = "";
     }
     this.scrollHistoryToBottom();
@@ -395,7 +456,8 @@ export class AIChatView extends ItemView implements ChatSessionDelegate {
   async onStreamFinished(result: StreamResult): Promise<void> {
     const p = this.pendingStreamRows;
     if (!p) return;
-    const mdSource = buildAssistantMarkdown(result.content, result.reasoning);
+    const showR = this.plugin.settings.showReasoningInChat;
+    const mdSource = buildAssistantMarkdown(result.content, showR ? result.reasoning : "");
     p.plainLayer.style.display = "none";
     p.reasonPlain.style.display = "none";
     p.mdLayer.style.display = "block";

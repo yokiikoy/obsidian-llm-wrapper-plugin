@@ -51,7 +51,7 @@
 - トークン数は **推定**（`estimateTokens` = 文字長 ×1.1）。実 API のトークンと一致しない。  
 - 画面上の推計は **wikilink 解決後の本文を含めない**（送信直前の `userContent` より小さく見えることがある）。  
 - Gemini 経路は **`reasoning` を常に空**（DeepSeek の `reasoning_content` のみ UI に反映）。  
-- モデル名はコード内固定（例: `deepseek-chat`, `gemini-1.5-flash`）。
+- API モデル ID は設定 `deepseekModel` / `geminiModel`（View ツールバーと設定タブ）。既定は `deepseek-chat` / `gemini-1.5-flash`。
 
 ---
 

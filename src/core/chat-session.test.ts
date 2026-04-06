@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TFile } from "obsidian";
+
+vi.mock("./url-fetch", () => ({
+  fetchUrlsAppendix: vi.fn(async () => ""),
+}));
+
 import { ChatSession, type ChatSessionDelegate, type VaultAdapter } from "./chat-session";
 import type { AIChatSettings } from "../settings";
 import type { ChatMessage, LlmClient, StreamResult } from "./llm";
@@ -16,9 +21,12 @@ function baseSettings(): AIChatSettings {
     provider: "deepseek",
     deepseekApiKey: "sk-test",
     geminiApiKey: "",
+    deepseekModel: "deepseek-chat",
+    geminiModel: "gemini-1.5-flash",
     systemPrompt: "You are a helpful assistant inside Obsidian.",
     temperature: 0.7,
     enableWikilinkContextResolution: false,
+    showReasoningInChat: true,
   };
 }
 
