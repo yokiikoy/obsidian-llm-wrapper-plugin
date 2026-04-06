@@ -1,0 +1,7 @@
+node_modules/
+main.js
+main.js.map
+.DS_Store
+
+# Obsidian plugin runtime data (may contain API keys)
+data.json

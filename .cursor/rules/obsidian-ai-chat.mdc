@@ -1,0 +1,26 @@
+---
+description: Obsidian AI Chat plugin — product scope, commits, and records
+alwaysApply: true
+---
+
+# Obsidian AI Chat（本リポジトリ）
+
+## スコープ
+
+- 機能・優先度は **要件定義書 v1.4 の MVP** に合わせる。明示の Go が出るまで Phase 2 や仕様外の拡張に進めない。
+- 設計の決めごとはチャットだけに残さない。議論が積み上がったら `DISCUSSION.md` または `docs/decisions/`（ADR）に要約・決定を移す。
+
+## Git
+
+- コミットメッセージの接頭辞: **`obsidian-ai-chat:`**（履歴を grep しやすくする）。
+- メッセージ本文は完全な英語または日本語の文で、何をしたか一読で分かるようにする。
+
+## 実装メモ
+
+- 汎用の働き方・ドキュメント規律は `yokii-dev-workflow.mdc`（シンボリックリンク）に従う。
+
+## 取り込み確認（人間）
+
+- 本ディレクトリを Cursor のワークスペースルートに開き、**Rules** に `yokii-dev-workflow` と `obsidian-ai-chat` が表示されることを確認する。
+- リポジトリを別マシンでクローンする場合、`yokii-dev-workflow.mdc` は相対パスのシンボリックリンクのため、同じ親階層に `cursor-dev-standards` が無いとリンク切れになる。そのときは `cursor-dev-standards` を同様の位置に置くか、正本ファイルをコピーして置き換える。
+- 全プロジェクト共通の補助ルールが必要なら、Cursor **Settings → Rules for AI** に短い要約を追加する（任意）。
