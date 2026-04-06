@@ -130,7 +130,8 @@
   align-items: center;
 }
 
-.ai-chat-toolbar .mod-cta {
+/* Only Send should absorb trailing space; toggles also use mod-cta when "On" and must not stack margin-right:auto */
+.ai-chat-toolbar .ai-chat-toolbar-send.mod-cta {
   margin-right: auto;
 }
 
@@ -154,7 +155,7 @@
     max-width: 100%;
   }
 
-  .ai-chat-toolbar .mod-cta {
+  .ai-chat-toolbar .ai-chat-toolbar-send.mod-cta {
     margin-right: 0;
   }
 }

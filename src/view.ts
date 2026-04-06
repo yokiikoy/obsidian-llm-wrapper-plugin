@@ -189,7 +189,7 @@ export class AIChatView extends ItemView implements ChatSessionDelegate {
     });
     this.loadFromNoteBtn.addEventListener("click", () => void this.onLoadNoteHistory());
 
-    this.sendBtn = toolbar.createEl("button", { text: "Send", cls: "mod-cta" });
+    this.sendBtn = toolbar.createEl("button", { text: "Send", cls: "mod-cta ai-chat-toolbar-send" });
     this.stopBtn = toolbar.createEl("button", { text: "Stop", cls: "mod-warning" });
     this.stopBtn.style.display = "none";
     this.clearBtn = toolbar.createEl("button", { text: "Clear session" });
