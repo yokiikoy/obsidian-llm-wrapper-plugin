@@ -291,5 +291,6 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 | 2026-04-06 | Phase A: `LlmClient.stream`（DeepSeek/Gemini SSE）、Stop / `AbortController`、プレーン→Markdown 確定描画、追記成功後のみ `messages` 確定、usage 行 | `00eb3f85bb4beceaedf5e034a2d5b33850c48043` |
 | 2026-04-06 | Phase B 相当: Wikilink コンテキスト（opt-in）、append 失敗時 DOM ロールバック、Gemini/DeepSeek パース調整、ADR `finish_reason` 補足、`docs/archive/SPEC.consulting.md` へ旧コンサル SPEC 退避 | `836a61542fe120ce7c69fdbb46c37018113c7e8b` |
 | 2026-04-06 | **v1.0.0** リリース確定: `manifest.json` / `package.json` を `1.0.0` に | `5960c92c34461bd88ded3f1b49bbdfd62d681815` |
+| 2026-04-06 | git-flow 採用: [`docs/GITFLOW.md`](GITFLOW.md)、`develop` ブランチ作成、`RECORDS.md` からリンク | `e5bfc50a271ea85f1dcee50130890afd0b3d3623` |
 
 記録運用は [`docs/RECORDS.md`](RECORDS.md) を参照。
