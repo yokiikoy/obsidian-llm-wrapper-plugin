@@ -6,29 +6,33 @@
 
 ## 1. プロダクト概要
 
-| 項目 | 内容 |
-|------|------|
-| 名称 | Obsidian AI Chat |
-| プラグイン ID | `obsidian-ai-chat` |
-| バージョン（`manifest.json`） | **1.2.0** |
-| 目的 | Vault 内で LLM とチャットし、**ロックした Markdown ノート末尾へ**会話を追記する |
-| プロバイダ | **DeepSeek**（`deepseek-chat`）/ **Gemini**（`gemini-1.5-flash`、SSE） |
-| エントリ | `src/main.ts` → esbuild で `main.js` |
+
+| 項目                     | 内容                                                                |
+| ---------------------- | ----------------------------------------------------------------- |
+| 名称                     | Obsidian AI Chat                                                  |
+| プラグイン ID               | `obsidian-ai-chat`                                                |
+| バージョン（`manifest.json`） | **1.2.0**                                                         |
+| 目的                     | Vault 内で LLM とチャットし、**ロックした Markdown ノート末尾へ**会話を追記する              |
+| プロバイダ                  | **DeepSeek**（`deepseek-chat`）/ **Gemini**（`gemini-1.5-flash`、SSE） |
+| エントリ                   | `src/main.ts` → esbuild で `main.js`                               |
+
 
 ---
 
 ## 2. ディレクトリと責務（主要ファイル）
 
-| パス | 役割 |
-|------|------|
-| [`src/main.ts`](../src/main.ts) | プラグイン読み込み、View 登録、コマンド／リボン |
-| [`src/view.ts`](../src/view.ts) | `ItemView`：UI、送信、`Scope` ショートカット、トークン表示、Modal 呼び出し |
-| [`src/token-limit-modal.ts`](../src/token-limit-modal.ts) | コンテキスト上限超過時の **Modal**（Truncate / Clear / Cancel） |
-| [`src/core/llm.ts`](../src/core/llm.ts) | SSE ストリーム、トークン推計、安全上限定数、`trimLeadingAssistantRun` |
-| [`src/core/wikilink-context.ts`](../src/core/wikilink-context.ts) | オプションの `[[wikilink]]` 深さ1解決 |
-| [`src/settings.ts`](../src/settings.ts) | 設定タブ・永続化 |
-| [`styles.css`](../styles.css) | View スタイル（吹き出し、ターゲット行、トークン行など） |
-| [`docs/SPEC.md`](SPEC.md) | **実装仕様書**（挙動の正） |
+
+| パス                                                                | 役割                                                 |
+| ----------------------------------------------------------------- | -------------------------------------------------- |
+| [`src/main.ts`](../src/main.ts)                                   | プラグイン読み込み、View 登録、コマンド／リボン                         |
+| [`src/view.ts`](../src/view.ts)                                   | `ItemView`：UI、送信、`Scope` ショートカット、トークン表示、Modal 呼び出し |
+| [`src/token-limit-modal.ts`](../src/token-limit-modal.ts)         | コンテキスト上限超過時の **Modal**（Truncate / Clear / Cancel）  |
+| [`src/core/llm.ts`](../src/core/llm.ts)                           | SSE ストリーム、トークン推計、安全上限定数、`trimLeadingAssistantRun`  |
+| [`src/core/wikilink-context.ts`](../src/core/wikilink-context.ts) | オプションの `[[wikilink]]` 深さ1解決                        |
+| [`src/settings.ts`](../src/settings.ts)                           | 設定タブ・永続化                                           |
+| [`styles.css`](../styles.css)                                     | View スタイル（吹き出し、ターゲット行、トークン行など）                     |
+| [`docs/SPEC.md`](SPEC.md)                                         | **実装仕様書**（挙動の正）                                    |
+
 
 **テスト対象外（意図的）:** `view.ts`、Modal、Obsidian API 直結は **Vitest 未カバー**（手動・E2E 想定）。
 
@@ -43,10 +47,12 @@
 
 ### 3.2 安全上限（定数）
 
-| プロバイダ | 定数 | 値 |
-|------------|------|-----|
-| Gemini | `GEMINI_INPUT_TOKEN_LIMIT_SAFE` | 800_000 |
+
+| プロバイダ    | 定数                                | 値       |
+| -------- | --------------------------------- | ------- |
+| Gemini   | `GEMINI_INPUT_TOKEN_LIMIT_SAFE`   | 800_000 |
 | DeepSeek | `DEEPSEEK_INPUT_TOKEN_LIMIT_SAFE` | 100_000 |
+
 
 ### 3.3 送信前フロー
 
@@ -78,11 +84,13 @@
 
 ## 5. テスト
 
-| コマンド | 内容 |
-|----------|------|
-| `npm test` | Vitest：`src/core/*.test.ts` |
-| `npm run build` | `main.js` 生成 |
+
+| コマンド               | 内容                          |
+| ------------------ | --------------------------- |
+| `npm test`         | Vitest：`src/core/*.test.ts` |
+| `npm run build`    | `main.js` 生成                |
 | `npx tsc --noEmit` | 型チェック（`skipLibCheck: true`） |
+
 
 **カバー例:** `estimateTokens` / `estimatePromptTokens` / `trimLeadingAssistantRun` / `limitChatMessagesForApiWindow` / `isAbortError`、ストリーム（`fetch` モック）、`extractWikilinkLinkpaths`。
 
@@ -109,11 +117,13 @@
 
 ## 8. 参照ドキュメント
 
-| 文書 | 用途 |
-|------|------|
-| [`docs/SPEC.md`](SPEC.md) | 実装の単一の仕様ソース |
-| [`docs/TEST_SPEC.md`](TEST_SPEC.md) | 単体テストの意図 |
+
+| 文書                                                        | 用途                    |
+| --------------------------------------------------------- | --------------------- |
+| [`docs/SPEC.md`](SPEC.md)                                 | 実装の単一の仕様ソース           |
+| [`docs/TEST_SPEC.md`](TEST_SPEC.md)                       | 単体テストの意図              |
 | [`docs/REPORT_TOKEN_CONTEXT.md`](REPORT_TOKEN_CONTEXT.md) | トークン・Modal 導入時の詳細レポート |
+
 
 ---
 
