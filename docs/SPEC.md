@@ -14,8 +14,8 @@ Obsidian 内で LLM とチャットし、**会話内容を Vault 内の Markdown
 
 **明示的にやらないこと（現行実装）:**
 
-- ストリーミング応答、ツール呼び出し、画像等マルチモーダル
-- 通信失敗時の自動リトライ、タイムアウト・キャンセル制御
+- ツール呼び出し、画像等マルチモーダル
+- 通信失敗時の自動リトライ、明示的なタイムアウト（`AbortController` によるユーザー中止は実装済み）
 - ノート側の手編集をチャット履歴へ反映（**単方向: プラグイン → ノートのみ**）
 - ノート上の過去ログからチャット UI 状態を自動復元
 - モデル名のユーザー設定（コード内定数）
@@ -82,31 +82,42 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 
 ### 5.1 抽象
 
-- `LlmClient.complete(messages, options): Promise<string>` — **非ストリーミング**で本文文字列のみ返す。
+- `LlmClient.stream(messages, options, onChunk, signal): Promise<StreamResult>` — **SSE ストリーミング**。`onChunk(textChunk, reasoningChunk)` で増分を通知（reasoning が無いプロバイダでは第 2 引数は空）。`signal` が `abort()` されると読み取りを打ち切り、`AbortError` 相当で拒否。
+- `StreamResult`: `content`（連結済み本文）、`reasoning`（連結済み、無ければ空）、`usage`（`promptTokens` / `completionTokens`、取得不可時は `0`）。
 - `ChatMessage`: `role` は `system` | `user` | `assistant`、`content` はプレーンテキスト。
 - `ChatOptions`: `temperature`, `systemPrompt`。
+- `isAbortError(e)` — `DOMException` / `Error` の `name === "AbortError"` を判定（View でサイレント中止に使用）。
 
 ### 5.2 DeepSeek
 
 - **HTTP:** `POST https://api.deepseek.com/chat/completions`
 - **認証:** `Authorization: Bearer <apiKey>`
 - **モデル（固定）:** `deepseek-chat`
-- **メッセージ整形:**
-  - `messages` 内の `system` は集約し、設定の `systemPrompt` と連結して **単一の `system` メッセージ** として先頭に置く（両方空なら system 行なし）。
-  - 残りは `user` / `assistant` を API の `messages` にそのまま並べる。
-- **エラー:** 非 2xx はレスポンス JSON の `error.message` があればそれを `Error` に、なければ `DeepSeek HTTP <status>`。本文空は `DeepSeek: empty response`。
+- **ストリーム:** `stream: true`、かつ **`stream_options: { include_usage: true }`**（終端チャンクの `usage` 取得用。プラン ADR 0001 と一致）。
+- **SSE:** `data: {json}` 行をパース。`choices[0].delta.content` → `textChunk`、`delta.reasoning_content` があれば → `reasoningChunk`。終端のルート `usage` を `StreamResult.usage` に。
+- **メッセージ整形:** `messages` 内の `system` は集約し、設定の `systemPrompt` と連結して **単一の `system` メッセージ** として先頭に置く（両方空なら system 行なし）。残りは `user` / `assistant` を API の `messages` にそのまま並べる。
+- **エラー:** 非 2xx はレスポンス JSON の `error.message` があればそれを `Error` に、なければ `DeepSeek HTTP <status>`。ストリーム完了後に本文・reasoning がともに空なら `DeepSeek: empty response`。
 
 ### 5.3 Gemini
 
-- **HTTP:** `POST https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=<apiKey>`（**モデル名は固定**）
+- **HTTP:** `POST https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent?alt=sse&key=<apiKey>`（**モデル名は固定**、**SSE**）
 - **system:** 設定 `systemPrompt` と、入力 `messages` 内の `system` を連結し、`systemInstruction.parts[0].text` に渡す（空なら省略）。
 - **会話:** `system` を除き、`user` → `user`、`assistant` → `model`。**連続同一 role は `parts` をマージ**。
 - **generationConfig:** `{ temperature }` のみ。
-- **エラー:** 非 2xx は `error.message` または `Gemini HTTP <status>`。結合テキスト空は `Gemini: empty response`。
+- **SSE:** イベント JSON の `candidates[0].content.parts` テキストを累積し、増分のみ `onChunk` に渡す。`usageMetadata` を `StreamResult.usage` に。
+- **エラー:** 非 2xx は `error.message` または `Gemini HTTP <status>`。ストリーム完了後にテキスト空なら `Gemini: empty response`。
 
 ### 5.4 ファクトリ
 
 `createLlmClient(creds)` — `provider` に応じてキー未設定時は `reject`（空キー）。
+
+### 5.5 API 送信用スライディング・ウィンドウ（`limitChatMessagesForApiWindow`）
+
+- **目的:** 会話が長いときの API コスト・遅延・コンテキスト上限への対策。`messages` 配列の **末尾だけ** を API に渡す。
+- **定数:** `DEFAULT_MAX_API_HISTORY_MESSAGES = 10`（`user` / `assistant` を合わせて最大 10 件）。
+- **挙動:** `messages.length > maxCount` のとき `messages.slice(-maxCount)`。先頭が連続する `assistant` なら先頭から落とし、**ウィンドウがアシスタントの途中から始まらない**ようにする。
+- **システムプロンプト:** `ChatMessage[]` には含めない。`ChatOptions.systemPrompt` により LLM 層が従来どおり先頭相当の指示としてマージする（DeepSeek は `system` メッセージ、Gemini は `systemInstruction`）。
+- **メモリ・ノート:** View の `messages` とノートへの追記は **全履歴**のまま。制限は **API ペイロードのみ**。
 
 ---
 
@@ -121,23 +132,26 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 ### 6.2 DOM 構成（上から順）
 
 1. **Target 行**（`ai-chat-target`）— 固定ラベル `Target:` + パスまたは未ロック説明。
-2. **履歴**（`ai-chat-history`）— メッセージごとにロール見出し + `MarkdownRenderer.render` 済み本文。
+2. **履歴**（`ai-chat-history`）— メッセージごとにロール見出し + 本文（確定済みは `MarkdownRenderer.render`、ストリーム中のアシスタントのみプレーンテキスト → 完了後に再描画）。
 3. **入力**（`textarea.ai-chat-input`）— 複数行。
-4. **ツールバー:** **Send**（`mod-cta`）、**Clear session**、**Usage**、読み込み文言 `Waiting for model…`（`ai-chat-loading`）。
+4. **ツールバー:** **Send**（`mod-cta`）、**Stop**（`mod-warning`、送信中のみ表示）、**Clear session**、**Usage**、読み込み文言 `Waiting for model…`（`ai-chat-loading`）。
 
 ### 6.3 状態（インスタンスフィールド）
 
 | 名前 | 意味 |
 |------|------|
-| `messages` | UI/API 用の履歴。`{ role: "user"\|"assistant", content: string }[]`。**ノート手編集では更新されない** |
-| `lockedTarget` | 追記先 `TFile`。初回送信成功処理の直前相当で確定（後述） |
+| `messages` | UI/API 用の履歴。`{ role: "user"\|"assistant", content: string }[]`（assistant は **本文のみ**、API 再送信用）。**ノート手編集では更新されない** |
+| `lockedTarget` | 追記先 `TFile`。未ロック時の Send で、API 呼び出し前にアクティブノートから代入（§6.5） |
 | `inFlight` | 送信中フラグ。`true` 時は重複送信不可 |
+| `abortController` | 当該リクエスト用。Stop（および Clear 中の中止）で `abort()` |
+| `pendingStreamRows` | ストリーム確定前に追加した user/assistant の DOM 行。abort またはエラーで削除 |
 
 `MarkdownRenderer` 用に `Component` を `onOpen` で `load()`、`onClose` で `unload()`。
 
 ### 6.4 履歴の描画
 
-- **差分追記:** 新規メッセージは `appendRenderedMessage` でコンテナ末尾に追加。全消去後の再描画は `renderAllMessages`（起動時・Clear 後）。
+- **差分追記:** 確定済みメッセージは `appendRenderedMessage` で末尾に追加。全消去後の再描画は `renderAllMessages`（起動時・Clear 後）。
+- **ストリーミング中のアシスタント行:** `MarkdownRenderer` は使わず、`textContent` で本文（および reasoning がある場合は別要素）を累積表示。完了後に `buildAssistantMarkdown`（reasoning は `<details>`）を **初めて** `MarkdownRenderer.render` し、プレーン層を隠して Markdown 層を表示（[`styles.css`](../styles.css) の `.ai-chat-md-stack` 等）。
 - **ソースパス:** `MarkdownRenderer` の `sourcePath` 引数は **`lockedTarget.path`**。未ロック時は `""`。
 
 ### 6.5 ターゲットノートのロック
@@ -164,22 +178,27 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 
 前提チェック後のコア順序:
 
-1. `setLoading(true)` — Send 無効、`Waiting for model…`。
-2. `apiPayload` = 既存 `messages` を `ChatMessage[]` に写したもの + 今ターンの `{ role: "user", content: userContent }`。
-3. `createLlmClient` → `complete(apiPayload, { temperature, systemPrompt })`。
-4. **成功時:**
-   - `messages` に user → assistant を順に `push`。
-   - 各々 `appendRenderedMessage`。
-   - `appendToLockedNote(userContent, reply)` — 存在再検証のうえ `vault.append`。
-   - 入力欄を空にする。
-5. **失敗時:** `Notice` にエラー文。**入力欄はクリアしない**（成功時のみクリア）。
-6. `finally`: `setLoading(false)`。
+1. `fullTurns` = 既存 `messages` を `ChatMessage[]` に写したもの + 今ターンの `{ role: "user", content: userContent }`。
+2. `apiPayload` = `limitChatMessagesForApiWindow(fullTurns, DEFAULT_MAX_API_HISTORY_MESSAGES)`。
+3. ユーザー行を履歴に描画（`MarkdownRenderer`）。アシスタント用プレースホルダ行を追加し `pendingStreamRows` に保持。
+4. `setLoading(true)` — Send を隠し Stop を表示、`Waiting for model…`。
+5. `AbortController` を生成し `createLlmClient` → `stream(apiPayload, options, onChunk, signal)` を `await`。チャンクごとにアシスタント行のプレーンテキストを更新（`MarkdownRenderer` は呼ばない）。
+6. **正常完了時:** 累積 `StreamResult` で `MarkdownRenderer` を実行し、**`await appendToLockedNote(userContent, result.content)`**（ノートには **本文のみ**、reasoning は含めない）。
+7. **追記成功後のみ:** `messages` に user → assistant（`result.content`）を `push`、usage 行（`ai-chat-usage-meta`）を表示、入力クリア、`pendingStreamRows` をクリア。
+8. **中止（`AbortError`）:** `Notice` なし。`pendingStreamRows` を DOM から削除。ノート・`messages` は変更しない。入力は保持。
+9. **その他の失敗:** `Notice` にエラー文。`pendingStreamRows` を削除。**入力はクリアしない**。
+10. `finally`: `setLoading(false)`、`abortController` を null。
 
-**API と UI の順序:** 応答取得後に UI 履歴へ追加し、その後ノート追記。ノート追記で例外が出た場合、UI 上には既に当ターンが表示されている（二重運用の非原子性あり）。
+**原子性:** ノート追記に失敗した場合、UI 上の履歴は当ターンを増やさない（ファイルとパネルの不整合を避ける）。ストリームは完了していても追記失敗なら `messages` に載せない。
 
-### 6.8 ノート追記フォーマット（`formatNoteBlock`）
+### 6.8 Stop / Clear との関係
 
-以下を **そのまま文字列連結**（先頭に改行 2 つ）して `vault.append`:
+- **Stop:** 進行中の `stream` を `AbortController.abort()` で打ち切る（§6.7 の中止パス）。
+- **Clear session:** 進行中なら先に `abort()`。仮行を削除し、`messages` と `lockedTarget` をリセット。
+
+### 6.9 ノート追記フォーマット（`formatNoteBlock`）
+
+`leadingSep = "\n\n"` と本文 `### User\n\n…` を連結し、**追記ブロック先頭は必ず 2 改行**で既存本文と視覚的に分離する。全体を `vault.append` する。
 
 ```markdown
 
@@ -195,11 +214,11 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 
 `userContent` には選択範囲付きの本文が入りうる。
 
-### 6.9 Clear session
+### 6.10 Clear session
 
-- `messages = []`, `lockedTarget = null`, ラベル更新、履歴 DOM を全再描画。
+- 送信中なら中止。`messages = []`, `lockedTarget = null`, ラベル更新、履歴 DOM を全再描画。
 
-### 6.10 Usage
+### 6.11 Usage
 
 - `window.open` で **設定の `provider`** に応じた URL を新規タブ（`noopener,noreferrer`）。
   - DeepSeek: `https://platform.deepseek.com/usage`
@@ -209,7 +228,7 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 
 ## 7. 排他・同時実行
 
-- 送信中（`inFlight`）は **Send 無視**。
+- 送信中（`inFlight`）は **Send 無視**。**Stop** は有効。
 - 複数 View インスタンスは **登録上は可能**だが、通常はリーフ 1 つ運用想定。各インスタンスは **独立した `messages` / `lockedTarget`** を持つ。
 
 ---
@@ -228,29 +247,35 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 
 ## 9. エラーとユーザーへのフィードバック
 
-- ほぼ全て `Notice("AI Chat: ...")`。
+- 通常は `Notice("AI Chat: ...")`。
+- **ユーザー中止（`AbortError`）** は Notice を出さない。
 - LLM の `throw` メッセージがそのまま表示されることが多い。
 
 ---
 
 ## 10. スタイル（[`styles.css`](../styles.css)）
 
-主要クラス: `ai-chat-root`, `ai-chat-history`, `ai-chat-msg`, `ai-chat-msg-role`, `ai-chat-input-row`, `ai-chat-input`, `ai-chat-toolbar`, `ai-chat-loading`, `ai-chat-target`。Obsidian CSS 変数（`--background-modifier-border` 等）に依存。
+主要クラス: `ai-chat-root`, `ai-chat-history`, `ai-chat-msg`, `ai-chat-msg-role`, `ai-chat-input-row`, `ai-chat-input`, `ai-chat-toolbar`, `ai-chat-loading`, `ai-chat-target`、ストリーミング用 `ai-chat-md-stack`, `ai-chat-plain-layer`, `ai-chat-md-layer`, `ai-chat-reason-plain`, `ai-chat-usage-meta`。Obsidian CSS 変数（`--background-modifier-border` 等）に依存。
 
 ---
 
 ## 11. 既知の制限・リスク（仕様としての注記）
 
-- **コンテキスト長:** 毎回フル履歴を API に送るため、長い会話でトークン上限・コスト・遅延が増大。
+- **コンテキスト長:** API にはスライディング・ウィンドウ（最大 10 メッセージ）のみ送信。それでも長文ターンや累積でトークン上限に達し得る。
 - **秘密情報:** API キーは設定 JSON に平文。
-- **ネットワーク:** `fetch` のタイムアウト・リトライ・キャンセル未実装。
+- **ネットワーク:** `fetch` の自動タイムアウト・自動リトライは未実装。**ユーザー中止**（Stop）は `AbortSignal` で実装済み。
+- **usage:** プロバイダが報告しない場合は `0` とし、UI は「(not reported)」表示。
 - **同一 role の system:** DeepSeek 側は複数 system をマージ。Gemini は `systemInstruction` 1 本にマージ。
-- **追記と UI の整合:** ノート追記失敗時に UI だけ先行更新済みとなりうる。
+- **ノート追記成功後の UI 描画:** `appendRenderedMessage`（`MarkdownRenderer`）が例外を出した場合、ノートには書き込み済みで UI が一部未更新となる余地あり（追記失敗時の UI 先行はしない）。
 
 ---
 
 ## 12. 変更履歴（ドキュメント）
 
-| 日付 | 内容 |
-|------|------|
-| 2026-04-06 | 初版: 現行実装に基づき記述 |
+| 日付 | 内容 | コミット（任意・大きな変更時） |
+|------|------|--------------------------------|
+| 2026-04-06 | 初版: 現行実装に基づき記述 | `41c62d1b…`（初期コミット） |
+| 2026-04-06 | 追記: API スライディング・ウィンドウ、`onSend` のノート先行成功後のみ UI 更新、`formatNoteBlock` 先頭 `\n\n` 明示 | `97ac5f8b…` |
+| 2026-04-06 | yokii-dev-workflow 遵守用: `docs/RECORDS.md`、`docs/decisions/`（ADR 0001）、`DISCUSSION.md`、`EVAL.md` | （本変更のコミット SHA を追記） |
+
+記録運用は [`docs/RECORDS.md`](RECORDS.md) を参照。

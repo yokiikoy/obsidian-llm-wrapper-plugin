@@ -12,8 +12,26 @@ export interface ChatOptions {
   systemPrompt: string;
 }
 
+export type ChunkCallback = (textChunk: string, reasoningChunk: string) => void;
+
+export interface TokenUsage {
+  promptTokens: number;
+  completionTokens: number;
+}
+
+export interface StreamResult {
+  content: string;
+  reasoning: string;
+  usage: TokenUsage;
+}
+
 export interface LlmClient {
-  complete(messages: ChatMessage[], options: ChatOptions): Promise<string>;
+  stream(
+    messages: ChatMessage[],
+    options: ChatOptions,
+    onChunk: ChunkCallback,
+    signal: AbortSignal
+  ): Promise<StreamResult>;
 }
 
 export interface LlmCredentials {
@@ -46,15 +64,34 @@ export function limitChatMessagesForApiWindow(
   return sliced.slice(start);
 }
 
+export function isAbortError(e: unknown): boolean {
+  if (e instanceof DOMException && e.name === "AbortError") return true;
+  if (e instanceof Error && e.name === "AbortError") return true;
+  return false;
+}
+
 const DEEPSEEK_URL = "https://api.deepseek.com/chat/completions";
 const GEMINI_MODEL = "gemini-1.5-flash";
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+const GEMINI_STREAM_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:streamGenerateContent`;
 
-async function deepSeekComplete(
+type DeepSeekDelta = {
+  content?: string;
+  reasoning_content?: string;
+};
+
+type DeepSeekSseJson = {
+  error?: { message?: string };
+  choices?: { delta?: DeepSeekDelta; finish_reason?: string | null }[];
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+  };
+};
+
+function buildDeepSeekPayload(
   messages: ChatMessage[],
-  apiKey: string,
   options: ChatOptions
-): Promise<string> {
+): Record<string, unknown> {
   const systemFromMessages = messages
     .filter((m) => m.role === "system")
     .map((m) => m.content)
@@ -64,15 +101,26 @@ async function deepSeekComplete(
     [options.systemPrompt?.trim(), systemFromMessages].filter(Boolean).join("\n\n") ||
     undefined;
 
-  const payload: Record<string, unknown> = {
+  return {
     model: "deepseek-chat",
     messages: [
       ...(system ? [{ role: "system", content: system }] : []),
       ...bodyMessages.map((m) => ({ role: m.role, content: m.content })),
     ],
     temperature: options.temperature,
+    stream: true,
+    stream_options: { include_usage: true },
   };
+}
 
+async function deepSeekStream(
+  messages: ChatMessage[],
+  apiKey: string,
+  options: ChatOptions,
+  onChunk: ChunkCallback,
+  signal: AbortSignal
+): Promise<StreamResult> {
+  const payload = buildDeepSeekPayload(messages, options);
   const res = await fetch(DEEPSEEK_URL, {
     method: "POST",
     headers: {
@@ -80,25 +128,83 @@ async function deepSeekComplete(
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
+    signal,
   });
 
-  const data = (await res.json()) as {
-    error?: { message?: string };
-    choices?: { message?: { content?: string } }[];
-  };
   if (!res.ok) {
-    throw new Error(data.error?.message ?? `DeepSeek HTTP ${res.status}`);
+    const errBody = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
+    throw new Error(errBody.error?.message ?? `DeepSeek HTTP ${res.status}`);
   }
-  const text = data.choices?.[0]?.message?.content;
-  if (!text) throw new Error("DeepSeek: empty response");
-  return text;
+
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error("DeepSeek: no response body");
+
+  const decoder = new TextDecoder();
+  let lineBuffer = "";
+  let content = "";
+  let reasoning = "";
+  let usage: TokenUsage = { promptTokens: 0, completionTokens: 0 };
+
+  const processLine = (line: string): void => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) return;
+    const dataStr = trimmed.slice(5).trim();
+    if (dataStr === "[DONE]") return;
+    let json: DeepSeekSseJson;
+    try {
+      json = JSON.parse(dataStr) as DeepSeekSseJson;
+    } catch {
+      return;
+    }
+    if (json.error?.message) throw new Error(json.error.message);
+    const delta = json.choices?.[0]?.delta;
+    if (delta) {
+      const tc = delta.content ?? "";
+      const rc = delta.reasoning_content ?? "";
+      if (tc || rc) {
+        content += tc;
+        reasoning += rc;
+        onChunk(tc, rc);
+      }
+    }
+    if (json.usage) {
+      usage = {
+        promptTokens: json.usage.prompt_tokens ?? 0,
+        completionTokens: json.usage.completion_tokens ?? 0,
+      };
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      lineBuffer += decoder.decode(value, { stream: true });
+      const lines = lineBuffer.split("\n");
+      lineBuffer = lines.pop() ?? "";
+      for (const line of lines) {
+        processLine(line);
+      }
+    }
+    if (lineBuffer.trim()) {
+      for (const line of lineBuffer.split("\n")) {
+        processLine(line);
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (!content && !reasoning) {
+    throw new Error("DeepSeek: empty stream");
+  }
+  return { content, reasoning, usage };
 }
 
-async function geminiComplete(
+function buildGeminiBody(
   messages: ChatMessage[],
-  apiKey: string,
   options: ChatOptions
-): Promise<string> {
+): Record<string, unknown> {
   const systemFromMessages = messages
     .filter((m) => m.role === "system")
     .map((m) => m.content)
@@ -119,7 +225,6 @@ async function geminiComplete(
     }
   }
 
-  const url = `${GEMINI_URL}?key=${encodeURIComponent(apiKey)}`;
   const body: Record<string, unknown> = {
     contents,
     generationConfig: { temperature: options.temperature },
@@ -127,41 +232,130 @@ async function geminiComplete(
   if (systemText) {
     body.systemInstruction = { parts: [{ text: systemText }] };
   }
+  return body;
+}
+
+type GeminiSseJson = {
+  error?: { message?: string };
+  candidates?: { content?: { parts?: { text?: string }[] } }[];
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+    totalTokenCount?: number;
+  };
+};
+
+async function geminiStream(
+  messages: ChatMessage[],
+  apiKey: string,
+  options: ChatOptions,
+  onChunk: ChunkCallback,
+  signal: AbortSignal
+): Promise<StreamResult> {
+  const url = `${GEMINI_STREAM_URL}?alt=sse&key=${encodeURIComponent(apiKey)}`;
+  const body = buildGeminiBody(messages, options);
 
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal,
   });
 
-  const data = (await res.json()) as {
-    error?: { message?: string };
-    candidates?: { content?: { parts?: { text?: string }[] } }[];
-  };
   if (!res.ok) {
-    throw new Error(data.error?.message ?? `Gemini HTTP ${res.status}`);
+    const errBody = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
+    throw new Error(errBody.error?.message ?? `Gemini HTTP ${res.status}`);
   }
-  const parts = data.candidates?.[0]?.content?.parts;
-  const text = parts?.map((p) => p.text ?? "").join("") ?? "";
-  if (!text) throw new Error("Gemini: empty response");
-  return text;
+
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error("Gemini: no response body");
+
+  const decoder = new TextDecoder();
+  let lineBuffer = "";
+  let content = "";
+  let usage: TokenUsage = { promptTokens: 0, completionTokens: 0 };
+
+  let textAggregate = "";
+
+  const processLine = (line: string): void => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) return;
+    const dataStr = trimmed.slice(5).trim();
+    if (!dataStr || dataStr === "[DONE]") return;
+    let json: GeminiSseJson;
+    try {
+      json = JSON.parse(dataStr) as GeminiSseJson;
+    } catch {
+      return;
+    }
+    if (json.error?.message) throw new Error(json.error.message);
+    const parts = json.candidates?.[0]?.content?.parts;
+    if (parts?.length) {
+      const piece = parts.map((p) => p.text ?? "").join("");
+      if (!piece) return;
+      let delta = piece;
+      if (piece.startsWith(textAggregate)) {
+        delta = piece.slice(textAggregate.length);
+        textAggregate = piece;
+      } else {
+        textAggregate += piece;
+      }
+      if (delta) {
+        content += delta;
+        onChunk(delta, "");
+      }
+    }
+    const um = json.usageMetadata;
+    if (um) {
+      const prompt = um.promptTokenCount ?? 0;
+      const completion =
+        um.candidatesTokenCount ??
+        Math.max(0, (um.totalTokenCount ?? 0) - prompt);
+      usage = { promptTokens: prompt, completionTokens: completion };
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      lineBuffer += decoder.decode(value, { stream: true });
+      const lines = lineBuffer.split("\n");
+      lineBuffer = lines.pop() ?? "";
+      for (const line of lines) {
+        processLine(line);
+      }
+    }
+    if (lineBuffer.trim()) {
+      for (const line of lineBuffer.split("\n")) {
+        processLine(line);
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (!content) {
+    throw new Error("Gemini: empty stream");
+  }
+  return { content, reasoning: "", usage };
 }
 
 export function createLlmClient(creds: LlmCredentials): LlmClient {
   if (creds.provider === "deepseek") {
     return {
-      complete(messages, options) {
+      stream(messages, options, onChunk, signal) {
         const key = creds.deepseekApiKey.trim();
         if (!key) return Promise.reject(new Error("DeepSeek API key is empty"));
-        return deepSeekComplete(messages, key, options);
+        return deepSeekStream(messages, key, options, onChunk, signal);
       },
     };
   }
   return {
-    complete(messages, options) {
+    stream(messages, options, onChunk, signal) {
       const key = creds.geminiApiKey.trim();
       if (!key) return Promise.reject(new Error("Gemini API key is empty"));
-      return geminiComplete(messages, key, options);
+      return geminiStream(messages, key, options, onChunk, signal);
     },
   };
 }

@@ -11,6 +11,7 @@ import type AIChatPlugin from "./main";
 import {
   createLlmClient,
   DEFAULT_MAX_API_HISTORY_MESSAGES,
+  isAbortError,
   limitChatMessagesForApiWindow,
   type ChatMessage,
 } from "./core/llm";
@@ -33,6 +34,7 @@ export class AIChatView extends ItemView {
   private historyEl!: HTMLDivElement;
   private inputEl!: HTMLTextAreaElement;
   private sendBtn!: HTMLButtonElement;
+  private stopBtn!: HTMLButtonElement;
   private clearBtn!: HTMLButtonElement;
   private usageBtn!: HTMLButtonElement;
   private loadingEl!: HTMLSpanElement;
@@ -43,6 +45,10 @@ export class AIChatView extends ItemView {
   /** Locked target note for the session; set on first send. */
   lockedTarget: TFile | null = null;
   private inFlight = false;
+  private abortController: AbortController | null = null;
+  /** Rows created for an in-flight stream; removed on abort/error before commit. */
+  private pendingStreamRows: { userWrap: HTMLElement; asstWrap: HTMLElement } | null =
+    null;
 
   constructor(leaf: WorkspaceLeaf, plugin: AIChatPlugin) {
     super(leaf);
@@ -77,11 +83,14 @@ export class AIChatView extends ItemView {
 
     const toolbar = root.createDiv({ cls: "ai-chat-toolbar" });
     this.sendBtn = toolbar.createEl("button", { text: "Send", cls: "mod-cta" });
+    this.stopBtn = toolbar.createEl("button", { text: "Stop", cls: "mod-warning" });
+    this.stopBtn.style.display = "none";
     this.clearBtn = toolbar.createEl("button", { text: "Clear session" });
     this.usageBtn = toolbar.createEl("button", { text: "Usage" });
     this.loadingEl = toolbar.createSpan({ cls: "ai-chat-loading", text: "" });
 
     this.sendBtn.addEventListener("click", () => void this.onSend());
+    this.stopBtn.addEventListener("click", () => this.onStop());
     this.clearBtn.addEventListener("click", () => this.onClearSession());
     this.usageBtn.addEventListener("click", () => this.onUsage());
 
@@ -115,6 +124,10 @@ export class AIChatView extends ItemView {
       this.sourcePath(),
       this.mdRoot
     );
+    this.scrollHistoryToBottom();
+  }
+
+  private scrollHistoryToBottom(): void {
     this.historyEl.scrollTop = this.historyEl.scrollHeight;
   }
 
@@ -125,7 +138,22 @@ export class AIChatView extends ItemView {
     }
   }
 
+  private removePendingStreamRows(): void {
+    if (!this.pendingStreamRows) return;
+    this.pendingStreamRows.userWrap.remove();
+    this.pendingStreamRows.asstWrap.remove();
+    this.pendingStreamRows = null;
+  }
+
+  private onStop(): void {
+    this.abortController?.abort();
+  }
+
   private onClearSession(): void {
+    if (this.inFlight) {
+      this.abortController?.abort();
+    }
+    this.removePendingStreamRows();
     this.messages = [];
     this.lockedTarget = null;
     this.refreshTargetLabel();
@@ -137,17 +165,12 @@ export class AIChatView extends ItemView {
     window.open(url, "_blank", "noopener,noreferrer");
   }
 
-  /** Resolve locked file if it still exists; otherwise null. */
   private resolveLockedFile(): TFile | null {
     if (!this.lockedTarget) return null;
     const abs = this.app.vault.getAbstractFileByPath(this.lockedTarget.path);
     return abs instanceof TFile ? abs : null;
   }
 
-  /**
-   * Selection from the editor only when the active note is the locked target
-   * (prevents leaking context from unrelated notes).
-   */
   private getSelectionContext(): string {
     const active = this.app.workspace.getActiveFile();
     if (!this.lockedTarget || !active || active.path !== this.lockedTarget.path) {
@@ -172,6 +195,8 @@ export class AIChatView extends ItemView {
 
   private setLoading(loading: boolean): void {
     this.inFlight = loading;
+    this.sendBtn.style.display = loading ? "none" : "";
+    this.stopBtn.style.display = loading ? "" : "none";
     this.sendBtn.disabled = loading;
     this.loadingEl.setText(loading ? "Waiting for model…" : "");
   }
@@ -189,6 +214,13 @@ export class AIChatView extends ItemView {
     }
     const block = this.formatNoteBlock(userContent, assistantContent);
     await this.app.vault.append(file, block);
+  }
+
+  private buildAssistantMarkdown(content: string, reasoning: string): string {
+    if (reasoning.trim()) {
+      return `<details>\n<summary>Reasoning</summary>\n\n${reasoning}\n\n</details>\n\n${content}`;
+    }
+    return content;
   }
 
   private async onSend(): Promise<void> {
@@ -231,27 +263,96 @@ export class AIChatView extends ItemView {
       DEFAULT_MAX_API_HISTORY_MESSAGES
     );
 
+    this.abortController = new AbortController();
+    const { signal } = this.abortController;
+
+    const userWrap = this.historyEl.createDiv({ cls: "ai-chat-msg" });
+    userWrap.createDiv({ cls: "ai-chat-msg-role", text: "user" });
+    const userBody = userWrap.createDiv();
+    await MarkdownRenderer.render(
+      this.app,
+      userContent,
+      userBody,
+      this.sourcePath(),
+      this.mdRoot
+    );
+
+    const asstWrap = this.historyEl.createDiv({ cls: "ai-chat-msg" });
+    asstWrap.createDiv({ cls: "ai-chat-msg-role", text: "assistant" });
+    const stack = asstWrap.createDiv({ cls: "ai-chat-md-stack" });
+    const reasonPlain = stack.createDiv({ cls: "ai-chat-reason-plain" });
+    reasonPlain.style.display = "none";
+    const plainLayer = stack.createDiv({ cls: "ai-chat-plain-layer" });
+    const mdLayer = stack.createDiv({ cls: "ai-chat-md-layer" });
+    mdLayer.style.display = "none";
+
+    const usageMeta = asstWrap.createDiv({ cls: "ai-chat-usage-meta" });
+    usageMeta.style.display = "none";
+
+    this.pendingStreamRows = { userWrap, asstWrap };
+
+    let accText = "";
+    let accReason = "";
+
     this.setLoading(true);
     try {
-      const reply = await client.complete(apiPayload, {
-        temperature: this.plugin.settings.temperature,
-        systemPrompt: this.plugin.settings.systemPrompt,
-      });
+      const result = await client.stream(
+        apiPayload,
+        {
+          temperature: this.plugin.settings.temperature,
+          systemPrompt: this.plugin.settings.systemPrompt,
+        },
+        (textChunk, reasoningChunk) => {
+          if (textChunk) {
+            accText += textChunk;
+            plainLayer.textContent = accText;
+          }
+          if (reasoningChunk) {
+            accReason += reasoningChunk;
+            reasonPlain.textContent = accReason;
+            reasonPlain.style.display = "";
+          }
+          this.scrollHistoryToBottom();
+        },
+        signal
+      );
 
-      await this.appendToLockedNote(userContent, reply);
+      const mdSource = this.buildAssistantMarkdown(result.content, result.reasoning);
+      plainLayer.style.display = "none";
+      reasonPlain.style.display = "none";
+      mdLayer.style.display = "block";
+      await MarkdownRenderer.render(
+        this.app,
+        mdSource,
+        mdLayer,
+        this.sourcePath(),
+        this.mdRoot
+      );
+
+      await this.appendToLockedNote(userContent, result.content);
 
       this.messages.push({ role: "user", content: userContent });
-      await this.appendRenderedMessage(this.messages[this.messages.length - 1]);
+      this.messages.push({ role: "assistant", content: result.content });
 
-      this.messages.push({ role: "assistant", content: reply });
-      await this.appendRenderedMessage(this.messages[this.messages.length - 1]);
+      const u = result.usage;
+      usageMeta.setText(
+        u.promptTokens || u.completionTokens
+          ? `Tokens · prompt ${u.promptTokens} · completion ${u.completionTokens}`
+          : "Tokens · (not reported)"
+      );
+      usageMeta.style.display = "block";
 
       this.inputEl.value = "";
+      this.pendingStreamRows = null;
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      new Notice(`AI Chat: ${msg}`);
+      if (!isAbortError(e)) {
+        const msg = e instanceof Error ? e.message : String(e);
+        new Notice(`AI Chat: ${msg}`);
+      }
+      this.removePendingStreamRows();
     } finally {
       this.setLoading(false);
+      this.abortController = null;
     }
   }
 }

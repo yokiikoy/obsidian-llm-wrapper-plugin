@@ -75,3 +75,30 @@
   color: var(--text-muted);
   word-break: break-all;
 }
+
+/* Streaming assistant: plain-text layer vs Markdown layer (display toggle, §7 layout) */
+.ai-chat-md-stack {
+  position: relative;
+  min-height: 1.25em;
+}
+
+.ai-chat-plain-layer {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-text);
+  font-size: var(--font-ui-small);
+}
+
+.ai-chat-reason-plain {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  margin-bottom: 0.35em;
+}
+
+.ai-chat-usage-meta {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  margin-top: 6px;
+}
