@@ -1,4 +1,5 @@
 import {
+  App,
   Component,
   ItemView,
   type KeymapEventListener,
@@ -11,16 +12,12 @@ import {
 } from "obsidian";
 import type AIChatPlugin from "./main";
 import {
-  createLlmClient,
-  estimatePromptTokens,
-  getInputTokenLimitForProvider,
-  isAbortError,
-  trimLeadingAssistantRun,
-  type ChatMessage,
-  type ChatOptions,
-  type LlmClient,
-  type LlmProviderId,
-} from "./core/llm";
+  buildAssistantMarkdown,
+  ChatSession,
+  type ChatSessionDelegate,
+  type VaultAdapter,
+} from "./core/chat-session";
+import type { StreamResult } from "./core/llm";
 import {
   buildWikilinkContextAppendix,
   wikilinkContextOptionsFromSettings,
@@ -42,9 +39,34 @@ export interface UiMessage {
   content: string;
 }
 
-export class AIChatView extends ItemView {
+function createVaultAdapter(app: App, getEnabled: () => boolean): VaultAdapter {
+  return {
+    resolveFile(path: string): TFile | null {
+      const abs = app.vault.getAbstractFileByPath(path);
+      return abs instanceof TFile ? abs : null;
+    },
+    async appendToFile(file: TFile, content: string): Promise<void> {
+      await app.vault.append(file, content);
+    },
+    async buildWikilinkContext(
+      rawPrompt: string,
+      sourcePath: string,
+      enabled: boolean
+    ): Promise<string> {
+      return buildWikilinkContextAppendix(
+        app,
+        rawPrompt,
+        sourcePath,
+        wikilinkContextOptionsFromSettings(enabled)
+      );
+    },
+  };
+}
+
+export class AIChatView extends ItemView implements ChatSessionDelegate {
   plugin: AIChatPlugin;
   private mdRoot: Component;
+  private session!: ChatSession;
   private historyEl!: HTMLDivElement;
   private inputEl!: HTMLTextAreaElement;
   private sendBtn!: HTMLButtonElement;
@@ -57,15 +79,15 @@ export class AIChatView extends ItemView {
   private tokenEstimateEl!: HTMLSpanElement;
   private tokenEstimateDebounce: ReturnType<typeof setTimeout> | undefined;
 
-  /** In-memory transcript; not synced from manual note edits (MVP). */
-  messages: UiMessage[] = [];
-  /** Locked target note for the session; set on first send. */
-  lockedTarget: TFile | null = null;
-  private inFlight = false;
-  private abortController: AbortController | null = null;
   /** Rows created for an in-flight stream; removed on abort/error before commit. */
-  private pendingStreamRows: { userWrap: HTMLElement; asstWrap: HTMLElement } | null =
-    null;
+  private pendingStreamRows: {
+    userWrap: HTMLElement;
+    asstWrap: HTMLElement;
+    plainLayer: HTMLDivElement;
+    reasonPlain: HTMLDivElement;
+    mdLayer: HTMLDivElement;
+    usageMeta: HTMLDivElement;
+  } | null = null;
 
   constructor(leaf: WorkspaceLeaf, plugin: AIChatPlugin) {
     super(leaf);
@@ -100,6 +122,12 @@ export class AIChatView extends ItemView {
 
   async onOpen(): Promise<void> {
     this.mdRoot.load();
+    this.session = new ChatSession(
+      createVaultAdapter(this.app, () => this.plugin.settings.enableWikilinkContextResolution),
+      this,
+      () => this.plugin.settings
+    );
+
     const root = this.contentEl.createDiv({ cls: "ai-chat-root" });
 
     const targetBlock = root.createDiv({ cls: "ai-chat-target" });
@@ -140,12 +168,13 @@ export class AIChatView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    this.session?.stop();
     this.mdRoot.unload();
     this.contentEl.empty();
   }
 
   private sourcePath(): string {
-    return this.lockedTarget?.path ?? "";
+    return this.session.lockedTarget?.path ?? "";
   }
 
   /** Recent markdown files only (`mtime` desc) — keeps the target `<select>` responsive. */
@@ -169,12 +198,12 @@ export class AIChatView extends ItemView {
   }
 
   private syncTargetSelectEnabled(): void {
-    this.targetSelectEl.disabled = this.lockedTarget !== null;
+    this.targetSelectEl.disabled = this.session.lockedTarget !== null;
   }
 
   private refreshTargetLabel(): void {
-    if (this.lockedTarget) {
-      this.targetEl.setText(this.lockedTarget.path);
+    if (this.session.lockedTarget) {
+      this.targetEl.setText(this.session.lockedTarget.path);
       return;
     }
     const picked = this.targetSelectEl?.value ?? "";
@@ -207,31 +236,19 @@ export class AIChatView extends ItemView {
 
   private async renderAllMessages(): Promise<void> {
     this.historyEl.empty();
-    for (const m of this.messages) {
-      await this.appendRenderedMessage(m);
+    for (const m of this.session.messages) {
+      if (m.role === "user" || m.role === "assistant") {
+        await this.appendRenderedMessage({ role: m.role, content: m.content });
+      }
     }
     this.refreshTokenEstimate();
-  }
-
-  private chatOptionsForEstimate(): ChatOptions {
-    return {
-      temperature: this.plugin.settings.temperature,
-      systemPrompt: this.plugin.settings.systemPrompt,
-    };
   }
 
   /** Estimated prompt tokens: session history + system, and current input draft when non-empty (wikilink appendix not included). */
   private refreshTokenEstimate(): void {
     if (!this.tokenEstimateEl) return;
-    const provider = this.plugin.settings.provider as LlmProviderId;
-    const opts = this.chatOptionsForEstimate();
     const raw = this.inputEl?.value?.trim() ?? "";
-    let msgs: ChatMessage[] = this.toApiMessages();
-    if (raw) {
-      msgs = [...msgs, { role: "user", content: raw }];
-    }
-    const n = estimatePromptTokens(msgs, opts, provider);
-    const limit = getInputTokenLimitForProvider(provider);
+    const { estimate: n, limit } = this.session.estimateCurrentTokens(raw);
     const draftHint = raw ? " (incl. draft input)" : "";
     this.tokenEstimateEl.setText(
       `Estimated prompt: ~${n.toLocaleString()} / ${limit.toLocaleString()} tokens${draftHint}`
@@ -256,16 +273,13 @@ export class AIChatView extends ItemView {
   }
 
   private onStop(): void {
-    this.abortController?.abort();
+    this.session.stop();
   }
 
   private onClearSession(): void {
-    if (this.inFlight) {
-      this.abortController?.abort();
-    }
+    this.session.stop();
     this.removePendingStreamRows();
-    this.messages = [];
-    this.lockedTarget = null;
+    this.session.clearSession();
     this.targetSelectEl.value = "";
     this.populateTargetSelectOptions();
     this.syncTargetSelectEnabled();
@@ -278,15 +292,9 @@ export class AIChatView extends ItemView {
     window.open(url, "_blank", "noopener,noreferrer");
   }
 
-  private resolveLockedFile(): TFile | null {
-    if (!this.lockedTarget) return null;
-    const abs = this.app.vault.getAbstractFileByPath(this.lockedTarget.path);
-    return abs instanceof TFile ? abs : null;
-  }
-
   private getSelectionContext(): string {
     const active = this.app.workspace.getActiveFile();
-    if (!this.lockedTarget || !active || active.path !== this.lockedTarget.path) {
+    if (!this.session.lockedTarget || !active || active.path !== this.session.lockedTarget.path) {
       return "";
     }
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -294,54 +302,19 @@ export class AIChatView extends ItemView {
     return view.editor.getSelection().trim();
   }
 
-  private buildUserTurnBody(rawInput: string, selection: string): string {
-    if (!selection) return rawInput;
-    return `${rawInput}\n\n---\n\n**Selection from note:**\n\n${selection}`;
-  }
-
-  private toApiMessages(): ChatMessage[] {
-    return this.messages.map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
-  }
-
   private setLoading(loading: boolean): void {
-    this.inFlight = loading;
     this.sendBtn.style.display = loading ? "none" : "";
     this.stopBtn.style.display = loading ? "" : "none";
     this.sendBtn.disabled = loading;
     this.loadingEl.setText(loading ? "Waiting for model…" : "");
   }
 
-  private formatNoteBlock(userContent: string, assistantContent: string): string {
-    const leadingSep = "\n\n";
-    const body = `### User\n\n${userContent}\n\n### Assistant\n\n${assistantContent}\n`;
-    return `${leadingSep}${body}`;
-  }
-
-  private async appendToLockedNote(userContent: string, assistantContent: string): Promise<void> {
-    const file = this.resolveLockedFile();
-    if (!file) {
-      throw new Error("Target note no longer exists; cannot append.");
-    }
-    const block = this.formatNoteBlock(userContent, assistantContent);
-    await this.app.vault.append(file, block);
-  }
-
-  private buildAssistantMarkdown(content: string, reasoning: string): string {
-    if (reasoning.trim()) {
-      return `<details>\n<summary>Reasoning</summary>\n\n${reasoning}\n\n</details>\n\n${content}`;
-    }
-    return content;
-  }
-
   private async onSend(): Promise<void> {
-    if (this.inFlight) return;
+    if (this.session.inFlight) return;
     const rawInput = this.inputEl.value.trim();
     if (!rawInput) return;
 
-    if (!this.lockedTarget) {
+    if (!this.session.lockedTarget) {
       const picked = this.targetSelectEl.value;
       let next: TFile | null = null;
       if (!picked) {
@@ -363,100 +336,18 @@ export class AIChatView extends ItemView {
         }
         next = abs;
       }
-      this.lockedTarget = next;
+      this.session.lockTarget(next);
       this.syncTargetSelectEnabled();
       this.refreshTargetLabel();
     }
 
-    const file = this.resolveLockedFile();
-    if (!file) {
-      new Notice("AI Chat: locked note is missing. Clear session or restore the file.");
-      return;
-    }
-    this.lockedTarget = file;
-
     const selection = this.getSelectionContext();
-    const baseUserTurn = this.buildUserTurnBody(rawInput, selection);
-    const wikilinkAppendix = await buildWikilinkContextAppendix(
-      this.app,
-      rawInput,
-      file.path,
-      wikilinkContextOptionsFromSettings(this.plugin.settings.enableWikilinkContextResolution)
-    );
-    const userContent = wikilinkAppendix ? `${baseUserTurn}${wikilinkAppendix}` : baseUserTurn;
-
-    const client = createLlmClient({
-      provider: this.plugin.settings.provider,
-      deepseekApiKey: this.plugin.settings.deepseekApiKey,
-      geminiApiKey: this.plugin.settings.geminiApiKey,
-    });
-
-    const provider = this.plugin.settings.provider as LlmProviderId;
-    const chatOptions: ChatOptions = {
-      temperature: this.plugin.settings.temperature,
-      systemPrompt: this.plugin.settings.systemPrompt,
-    };
-    const tokenLimit = getInputTokenLimitForProvider(provider);
-
-    let fullTurns: ChatMessage[] = [
-      ...this.toApiMessages(),
-      { role: "user", content: userContent },
-    ];
-
-    for (;;) {
-      let est = estimatePromptTokens(fullTurns, chatOptions, provider);
-      if (est <= tokenLimit) {
-        const apiPayload = trimLeadingAssistantRun(fullTurns);
-        if (apiPayload.length === 0) {
-          new Notice("AI Chat: no valid messages to send after trimming.");
-          return;
-        }
-        await this.dispatchStream(userContent, apiPayload, chatOptions, client);
-        return;
-      }
-
-      const choice = await openTokenLimitModal(this.app, est, tokenLimit);
-      if (choice === "cancel") return;
-
-      if (choice === "clear") {
-        this.messages = [];
-        await this.renderAllMessages();
-        fullTurns = [{ role: "user", content: userContent }];
-        est = estimatePromptTokens(fullTurns, chatOptions, provider);
-        if (est > tokenLimit) {
-          new Notice("AI Chat: message is still too long. Shorten your input.");
-          return;
-        }
-        continue;
-      }
-
-      let candidate = fullTurns.slice();
-      while (
-        candidate.length > 1 &&
-        estimatePromptTokens(candidate, chatOptions, provider) > tokenLimit
-      ) {
-        candidate.shift();
-      }
-      if (estimatePromptTokens(candidate, chatOptions, provider) > tokenLimit) {
-        new Notice("AI Chat: message is still too long. Shorten your input.");
-        return;
-      }
-      const dropped = fullTurns.length - candidate.length;
-      this.messages = this.messages.slice(dropped);
-      await this.renderAllMessages();
-      fullTurns = candidate;
-    }
+    await this.session.send(rawInput, selection);
   }
 
-  private async dispatchStream(
-    userContent: string,
-    apiPayload: ChatMessage[],
-    chatOptions: ChatOptions,
-    client: LlmClient
-  ): Promise<void> {
-    this.abortController = new AbortController();
-    const { signal } = this.abortController;
+  // --- ChatSessionDelegate ---
 
+  async onSendStarting(userContent: string): Promise<void> {
     const userWrap = this.historyEl.createDiv({ cls: "ai-chat-msg ai-chat-msg-user" });
     userWrap.createDiv({ cls: "ai-chat-msg-role", text: "user" });
     const userBubble = userWrap.createDiv({ cls: "ai-chat-msg-bubble-inner" });
@@ -481,68 +372,85 @@ export class AIChatView extends ItemView {
     const usageMeta = asstWrap.createDiv({ cls: "ai-chat-usage-meta" });
     usageMeta.style.display = "none";
 
-    this.pendingStreamRows = { userWrap, asstWrap };
+    this.pendingStreamRows = {
+      userWrap,
+      asstWrap,
+      plainLayer,
+      reasonPlain,
+      mdLayer,
+      usageMeta,
+    };
+  }
 
-    let accText = "";
-    let accReason = "";
+  onStreamChunk(textChunk: string, reasoningChunk: string): void {
+    const p = this.pendingStreamRows;
+    if (!p) return;
+    if (textChunk) {
+      const prev = p.plainLayer.textContent ?? "";
+      p.plainLayer.textContent = prev + textChunk;
+    }
+    if (reasoningChunk) {
+      const prevR = p.reasonPlain.textContent ?? "";
+      p.reasonPlain.textContent = prevR + reasoningChunk;
+      p.reasonPlain.style.display = "";
+    }
+    this.scrollHistoryToBottom();
+  }
 
-    this.setLoading(true);
-    try {
-      const result = await client.stream(apiPayload, chatOptions, (textChunk, reasoningChunk) => {
-        if (textChunk) {
-          accText += textChunk;
-          plainLayer.textContent = accText;
-        }
-        if (reasoningChunk) {
-          accReason += reasoningChunk;
-          reasonPlain.textContent = accReason;
-          reasonPlain.style.display = "";
-        }
-        this.scrollHistoryToBottom();
-      }, signal);
+  async onStreamFinished(result: StreamResult): Promise<void> {
+    const p = this.pendingStreamRows;
+    if (!p) return;
+    const mdSource = buildAssistantMarkdown(result.content, result.reasoning);
+    p.plainLayer.style.display = "none";
+    p.reasonPlain.style.display = "none";
+    p.mdLayer.style.display = "block";
+    await MarkdownRenderer.render(
+      this.app,
+      mdSource,
+      p.mdLayer,
+      this.sourcePath(),
+      this.mdRoot
+    );
+  }
 
-      const mdSource = this.buildAssistantMarkdown(result.content, result.reasoning);
-      plainLayer.style.display = "none";
-      reasonPlain.style.display = "none";
-      mdLayer.style.display = "block";
-      await MarkdownRenderer.render(
-        this.app,
-        mdSource,
-        mdLayer,
-        this.sourcePath(),
-        this.mdRoot
-      );
+  onTurnComplete(_userContent: string, result: StreamResult): void {
+    const p = this.pendingStreamRows;
+    if (!p) return;
+    const u = result.usage;
+    p.usageMeta.setText(
+      u.promptTokens || u.completionTokens
+        ? `Tokens · prompt ${u.promptTokens} · completion ${u.completionTokens}`
+        : "Tokens · (not reported)"
+    );
+    p.usageMeta.style.display = "block";
+    this.inputEl.value = "";
+    this.pendingStreamRows = null;
+  }
 
-      try {
-        await this.appendToLockedNote(userContent, result.content);
-      } catch (appendErr) {
-        this.removePendingStreamRows();
-        throw appendErr;
-      }
+  onTurnRolledBack(): void {
+    this.removePendingStreamRows();
+  }
 
-      this.messages.push({ role: "user", content: userContent });
-      this.messages.push({ role: "assistant", content: result.content });
-
-      const u = result.usage;
-      usageMeta.setText(
-        u.promptTokens || u.completionTokens
-          ? `Tokens · prompt ${u.promptTokens} · completion ${u.completionTokens}`
-          : "Tokens · (not reported)"
-      );
-      usageMeta.style.display = "block";
-
-      this.inputEl.value = "";
-      this.pendingStreamRows = null;
-    } catch (e) {
-      if (!isAbortError(e)) {
-        const msg = e instanceof Error ? e.message : String(e);
-        new Notice(`AI Chat: ${msg}`);
-      }
-      this.removePendingStreamRows();
-    } finally {
-      this.setLoading(false);
-      this.abortController = null;
+  onLoadingChanged(loading: boolean): void {
+    this.setLoading(loading);
+    if (!loading) {
       this.refreshTokenEstimate();
     }
+  }
+
+  onMessagesChanged(): void {
+    void this.renderAllMessages();
+  }
+
+  onSessionCleared(): void {
+    // Session state cleared; caller (onClearSession) updates select + full re-render.
+  }
+
+  promptTokenLimitChoice(estimated: number, limit: number) {
+    return openTokenLimitModal(this.app, estimated, limit);
+  }
+
+  showNotice(message: string): void {
+    new Notice(message);
   }
 }

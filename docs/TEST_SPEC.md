@@ -19,6 +19,7 @@
 | メッセージ窓・Abort 判定   | `src/core/llm.ts`              | `limitChatMessagesForApiWindow`, `isAbortError`  |
 | LLM クライアント（ストリーム） | `src/core/llm.ts`              | `createLlmClient` → DeepSeek / Gemini の `stream` |
 | ウィキリンク抽出（純粋）      | `src/core/wikilink-context.ts` | `extractWikilinkLinkpaths`                       |
+| セッション（Vault 注入）      | `src/core/chat-session.ts`     | `ChatSession.send`、トークン超過、Abort 時のロールバック |
 
 
 ### 1.3 テスト対象外（Out of scope）
@@ -175,35 +176,51 @@
 
 ---
 
-## 7. テスト一覧サマリ（件数の目安）
+## 7. `src/core/chat-session.test.ts`
+
+対象: **`ChatSession`**（`VaultAdapter` と `createLlmClient` をモック注入）。設定はテスト内オブジェクト（`settings.ts` の実行時 import を避け `PluginSettingTab` スタブ問題を回避）。
+
+
+| #   | ケース名                         | 前提・操作                                                         | 期待                                                                 |
+| --- | ---------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------ |
+| CS1 | 正常送信                         | `stream` が本文返却、`appendToFile` あり                               | `appendToFile` が呼ばれ、`session.messages` が user/assistant 2 件、`onTurnComplete` が呼ばれる |
+| CS2 | `AbortError`                   | `stream` が `name === "AbortError"` で reject                         | `append` なし、`messages` 空のまま、`onTurnRolledBack`、Notice なし              |
+| CS3 | トークン超過 → Modal（`estimatePromptTokens` スタブ） | `estimatePromptTokens` を大きい値に固定し、`promptTokenLimitChoice` が `"cancel"` | `stream` 未呼び出し、`promptTokenLimitChoice` が呼ばれる                              |
+
+---
+
+## 8. テスト一覧サマリ（件数の目安）
 
 実装時は `npm test` の出力が正。本書作成時点の構成は次のとおり。
 
 
 | ファイル                       | おおよそのテスト数 | 主題                      |
 | -------------------------- | --------- | ----------------------- |
-| `llm.test.ts`              | 8         | メッセージ窓 + Abort 判定       |
+| `llm.test.ts`              | 12        | メッセージ窓 + Abort 判定       |
 | `llm.stream.test.ts`       | 8         | `createLlmClient` ストリーム |
 | `wikilink-context.test.ts` | 5         | ウィキリンク抽出                |
-| **合計**                     | **21**    | —                       |
+| `chat-session.test.ts`     | 3         | `ChatSession` + Vault モック |
+| **合計**                     | **28**    | —                       |
 
 
 ---
 
-## 8. 純粋性・依存の監視（GitNexus 等）
+## 9. 純粋性・依存の監視（GitNexus 等）
 
 計画上のチェックとして以下を推奨する。
 
 - `**src/core` の import 監視:** `obsidian` など UI ランタイム依存が純粋モジュールに混入していないか（例: `llm.ts` は原則 `obsidian` を import しない）。
 - `**wikilink-context.ts`** は `**App` / `TFile` のため `obsidian` を import する**ため、「core 全体が obsidian フリー」ではない。テストでは **エイリアススタブ**で解決している。
+- **`chat-session.ts`** は `**TFile` 型のため `obsidian` を import する**（`VaultAdapter` の引数型）。`chat-session.test.ts` は **`TFile` スタブ**を使用する。
 
 ---
 
-## 9. 変更履歴（メンテ用）
+## 10. 変更履歴（メンテ用）
 
 
 | 日付         | 内容                                             |
 | ---------- | ---------------------------------------------- |
 | 2026-04-06 | 初版: 既存 `*.test.ts` と `vitest.config.ts` に基づき記述 |
+| 2026-04-06 | `chat-session.test.ts` と件数サマリ（計 28）を追記 |
 
 
