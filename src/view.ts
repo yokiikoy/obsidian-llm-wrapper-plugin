@@ -1,9 +1,11 @@
 import {
   Component,
   ItemView,
+  type KeymapEventListener,
   MarkdownRenderer,
   MarkdownView,
   Notice,
+  Scope,
   TFile,
   WorkspaceLeaf,
 } from "obsidian";
@@ -27,6 +29,9 @@ const USAGE_URLS = {
   gemini: "https://aistudio.google.com/app/plan_information",
 } as const;
 
+/** Cap dropdown options to avoid DOM freeze on huge vaults; sorted by `mtime` desc. */
+const TARGET_SELECT_MAX_FILES = 50;
+
 export interface UiMessage {
   role: "user" | "assistant";
   content: string;
@@ -43,6 +48,7 @@ export class AIChatView extends ItemView {
   private usageBtn!: HTMLButtonElement;
   private loadingEl!: HTMLSpanElement;
   private targetEl!: HTMLSpanElement;
+  private targetSelectEl!: HTMLSelectElement;
 
   /** In-memory transcript; not synced from manual note edits (MVP). */
   messages: UiMessage[] = [];
@@ -58,6 +64,19 @@ export class AIChatView extends ItemView {
     super(leaf);
     this.plugin = plugin;
     this.mdRoot = new Component();
+    this.scope = new Scope(this.app.scope);
+    const sendFromKeymap: KeymapEventListener = (evt) => {
+      if (evt.isComposing) return;
+      if (!this.inputEl || document.activeElement !== this.inputEl) return;
+      void this.onSend();
+      return false;
+    };
+    this.scope.register(["Mod"], "Enter", sendFromKeymap);
+    this.scope.register(["Mod"], "NumpadEnter", sendFromKeymap);
+    this.scope.register(["Ctrl"], "Enter", sendFromKeymap);
+    this.scope.register(["Ctrl"], "NumpadEnter", sendFromKeymap);
+    this.scope.register(["Meta"], "Enter", sendFromKeymap);
+    this.scope.register(["Meta"], "NumpadEnter", sendFromKeymap);
   }
 
   getViewType(): string {
@@ -76,9 +95,14 @@ export class AIChatView extends ItemView {
     this.mdRoot.load();
     const root = this.contentEl.createDiv({ cls: "ai-chat-root" });
 
-    const targetRow = root.createDiv({ cls: "ai-chat-target" });
-    targetRow.setText("Target: ");
-    this.targetEl = targetRow.createSpan();
+    const targetBlock = root.createDiv({ cls: "ai-chat-target" });
+    const pickRow = targetBlock.createDiv({ cls: "ai-chat-target-pick-row" });
+    pickRow.createSpan({ text: "Note: ", cls: "ai-chat-target-pick-label" });
+    this.targetSelectEl = pickRow.createEl("select", { cls: "ai-chat-target-select" });
+    this.populateTargetSelectOptions();
+    this.targetSelectEl.addEventListener("change", () => this.refreshTargetLabel());
+    const detailRow = targetBlock.createDiv({ cls: "ai-chat-target-detail" });
+    this.targetEl = detailRow.createSpan();
 
     this.historyEl = root.createDiv({ cls: "ai-chat-history" });
 
@@ -98,6 +122,7 @@ export class AIChatView extends ItemView {
     this.clearBtn.addEventListener("click", () => this.onClearSession());
     this.usageBtn.addEventListener("click", () => this.onUsage());
 
+    this.syncTargetSelectEnabled();
     this.refreshTargetLabel();
     await this.renderAllMessages();
   }
@@ -111,20 +136,53 @@ export class AIChatView extends ItemView {
     return this.lockedTarget?.path ?? "";
   }
 
+  /** Recent markdown files only (`mtime` desc) — keeps the target `<select>` responsive. */
+  private topMarkdownFilesByMtime(limit: number): TFile[] {
+    const files = this.app.vault.getMarkdownFiles().slice();
+    files.sort((a, b) => b.stat.mtime - a.stat.mtime);
+    return files.slice(0, limit);
+  }
+
+  private populateTargetSelectOptions(): void {
+    const sel = this.targetSelectEl;
+    const keep = sel.value;
+    sel.empty();
+    sel.createEl("option", { value: "", text: "Active note (on send)" });
+    for (const f of this.topMarkdownFilesByMtime(TARGET_SELECT_MAX_FILES)) {
+      sel.createEl("option", { value: f.path, text: f.path });
+    }
+    if (keep && Array.from(sel.options).some((o) => o.value === keep)) {
+      sel.value = keep;
+    }
+  }
+
+  private syncTargetSelectEnabled(): void {
+    this.targetSelectEl.disabled = this.lockedTarget !== null;
+  }
+
   private refreshTargetLabel(): void {
-    this.targetEl.setText(
-      this.lockedTarget ? this.lockedTarget.path : "(not locked — send locks active note)"
-    );
+    if (this.lockedTarget) {
+      this.targetEl.setText(this.lockedTarget.path);
+      return;
+    }
+    const picked = this.targetSelectEl?.value ?? "";
+    if (!picked) {
+      this.targetEl.setText("Next send locks: active note (or pick a file above)");
+    } else {
+      this.targetEl.setText(`Next send locks: ${picked}`);
+    }
   }
 
   private async appendRenderedMessage(msg: UiMessage): Promise<void> {
-    const wrap = this.historyEl.createDiv({ cls: "ai-chat-msg" });
+    const wrap = this.historyEl.createDiv({
+      cls: `ai-chat-msg ai-chat-msg-${msg.role}`,
+    });
     wrap.createDiv({ cls: "ai-chat-msg-role", text: msg.role });
-    const body = wrap.createDiv();
+    const inner = wrap.createDiv({ cls: "ai-chat-msg-bubble-inner" });
     await MarkdownRenderer.render(
       this.app,
       msg.content,
-      body,
+      inner,
       this.sourcePath(),
       this.mdRoot
     );
@@ -160,6 +218,9 @@ export class AIChatView extends ItemView {
     this.removePendingStreamRows();
     this.messages = [];
     this.lockedTarget = null;
+    this.targetSelectEl.value = "";
+    this.populateTargetSelectOptions();
+    this.syncTargetSelectEnabled();
     this.refreshTargetLabel();
     void this.renderAllMessages();
   }
@@ -233,12 +294,29 @@ export class AIChatView extends ItemView {
     if (!rawInput) return;
 
     if (!this.lockedTarget) {
-      const active = this.app.workspace.getActiveFile();
-      if (!active) {
-        new Notice("AI Chat: open a note and focus it, then send to lock it as the target.");
-        return;
+      const picked = this.targetSelectEl.value;
+      let next: TFile | null = null;
+      if (!picked) {
+        const active = this.app.workspace.getActiveFile();
+        if (!active) {
+          new Notice(
+            "AI Chat: open a note and focus it, or pick a file in the list, then send."
+          );
+          return;
+        }
+        next = active;
+      } else {
+        const abs = this.app.vault.getAbstractFileByPath(picked);
+        if (!(abs instanceof TFile)) {
+          new Notice(
+            "AI Chat: selected note is missing. Pick another file or use Active note."
+          );
+          return;
+        }
+        next = abs;
       }
-      this.lockedTarget = active;
+      this.lockedTarget = next;
+      this.syncTargetSelectEnabled();
       this.refreshTargetLabel();
     }
 
@@ -277,20 +355,21 @@ export class AIChatView extends ItemView {
     this.abortController = new AbortController();
     const { signal } = this.abortController;
 
-    const userWrap = this.historyEl.createDiv({ cls: "ai-chat-msg" });
+    const userWrap = this.historyEl.createDiv({ cls: "ai-chat-msg ai-chat-msg-user" });
     userWrap.createDiv({ cls: "ai-chat-msg-role", text: "user" });
-    const userBody = userWrap.createDiv();
+    const userBubble = userWrap.createDiv({ cls: "ai-chat-msg-bubble-inner" });
     await MarkdownRenderer.render(
       this.app,
       userContent,
-      userBody,
+      userBubble,
       this.sourcePath(),
       this.mdRoot
     );
 
-    const asstWrap = this.historyEl.createDiv({ cls: "ai-chat-msg" });
+    const asstWrap = this.historyEl.createDiv({ cls: "ai-chat-msg ai-chat-msg-assistant" });
     asstWrap.createDiv({ cls: "ai-chat-msg-role", text: "assistant" });
-    const stack = asstWrap.createDiv({ cls: "ai-chat-md-stack" });
+    const asstBubble = asstWrap.createDiv({ cls: "ai-chat-msg-bubble-inner" });
+    const stack = asstBubble.createDiv({ cls: "ai-chat-md-stack" });
     const reasonPlain = stack.createDiv({ cls: "ai-chat-reason-plain" });
     reasonPlain.style.display = "none";
     const plainLayer = stack.createDiv({ cls: "ai-chat-plain-layer" });

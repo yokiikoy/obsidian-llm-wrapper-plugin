@@ -65,9 +65,9 @@ export function limitChatMessagesForApiWindow(
 }
 
 export function isAbortError(e: unknown): boolean {
-  if (e instanceof DOMException && e.name === "AbortError") return true;
-  if (e instanceof Error && e.name === "AbortError") return true;
-  return false;
+  if (e === null || typeof e !== "object") return false;
+  const name = (e as { name?: unknown }).name;
+  return name === "AbortError";
 }
 
 const DEEPSEEK_URL = "https://api.deepseek.com/chat/completions";

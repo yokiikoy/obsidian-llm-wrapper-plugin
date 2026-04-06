@@ -87,7 +87,7 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 - `StreamResult`: `content`（連結済み本文）、`reasoning`（連結済み、無ければ空）、`usage`（`promptTokens` / `completionTokens`、取得不可時は `0`）。
 - `ChatMessage`: `role` は `system` | `user` | `assistant`、`content` はプレーンテキスト。
 - `ChatOptions`: `temperature`, `systemPrompt`。
-- `isAbortError(e)` — `DOMException` / `Error` の `name === "AbortError"` を判定（View でサイレント中止に使用）。
+- `isAbortError(e)` — オブジェクトの **`name === "AbortError"`** で判定（`instanceof` に依存しない。View でサイレント中止に使用）。
 
 ### 5.2 DeepSeek
 
@@ -132,9 +132,9 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 
 ### 6.2 DOM 構成（上から順）
 
-1. **Target 行**（`ai-chat-target`）— 固定ラベル `Target:` + パスまたは未ロック説明。
-2. **履歴**（`ai-chat-history`）— メッセージごとにロール見出し + 本文（確定済みは `MarkdownRenderer.render`、ストリーム中のアシスタントのみプレーンテキスト → 完了後に再描画）。
-3. **入力**（`textarea.ai-chat-input`）— 複数行。
+1. **Target ブロック**（`ai-chat-target`）— **ノート選択**（`select.ai-chat-target-select`）と **状態行**（`ai-chat-target-detail` 内スパン）。未ロック時は「次の送信でロックする先」を表示、ロック後は追記先パス。
+2. **履歴**（`ai-chat-history`）— 縦フレックス。各メッセージは `ai-chat-msg` + ロール修飾子 `ai-chat-msg-user`（右寄せ）または `ai-chat-msg-assistant`（左寄せ）。ロールラベル（`ai-chat-msg-role`）の下に **吹き出し内側** `ai-chat-msg-bubble-inner`（`overflow-x: auto`、`word-break` 系でコードブロック・テーブルが横幅を突き破らない）。確定済み本文は `MarkdownRenderer.render`、ストリーム中のアシスタントのみプレーンテキスト → 完了後に再描画。
+3. **入力**（`textarea.ai-chat-input`）— 複数行。**Ctrl+Enter / Cmd+Enter**（および **Mod+Enter**：macOS では Cmd、それ以外では Ctrl）で送信（通常 Enter は改行）。**IME 変換中**（`isComposing`）は送信しない。Obsidian はキーを DOM のみで拾えないことがあるため、**`View.scope`（`new Scope(this.app.scope)`）に `Scope.register`** で `Mod` / `Ctrl` / `Meta` と `Enter` / `NumpadEnter` を登録し、**フォーカスが入力欄のときだけ** `onSend` する（ハンドラは `false` を返して既定処理を抑止）。
 4. **ツールバー:** **Send**（`mod-cta`）、**Stop**（`mod-warning`、送信中のみ表示）、**Clear session**、**Usage**、読み込み文言 `Waiting for model…`（`ai-chat-loading`）。
 
 ### 6.3 状態（インスタンスフィールド）
@@ -142,7 +142,7 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 | 名前 | 意味 |
 |------|------|
 | `messages` | UI/API 用の履歴。`{ role: "user"\|"assistant", content: string }[]`（assistant は **本文のみ**、API 再送信用）。**ノート手編集では更新されない** |
-| `lockedTarget` | 追記先 `TFile`。未ロック時の Send で、API 呼び出し前にアクティブノートから代入（§6.5） |
+| `lockedTarget` | 追記先 `TFile`。未ロック時の初回 Send で、プルダウンまたはアクティブノートから確定（§6.5） |
 | `inFlight` | 送信中フラグ。`true` 時は重複送信不可 |
 | `abortController` | 当該リクエスト用。Stop（および Clear 中の中止）で `abort()` |
 | `pendingStreamRows` | ストリーム確定前に追加した user/assistant の DOM 行。abort またはエラーで削除 |
@@ -152,14 +152,22 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 ### 6.4 履歴の描画
 
 - **差分追記:** 確定済みメッセージは `appendRenderedMessage` で末尾に追加。全消去後の再描画は `renderAllMessages`（起動時・Clear 後）。
-- **ストリーミング中のアシスタント行:** `MarkdownRenderer` は使わず、`textContent` で本文（および reasoning がある場合は別要素）を累積表示。完了後に `buildAssistantMarkdown`（reasoning は `<details>`）を **初めて** `MarkdownRenderer.render` し、プレーン層を隠して Markdown 層を表示（[`styles.css`](../styles.css) の `.ai-chat-md-stack` 等）。
+- **レイアウト:** ユーザーは右寄せ（`ai-chat-msg-user`）、アシスタントは左寄せ（`ai-chat-msg-assistant`）。本文は `.ai-chat-msg-bubble-inner` 内に描画し、横方向のはみ出しは内側スクロールと折り返しで抑える。
+- **ストリーミング中のアシスタント行:** `MarkdownRenderer` は使わず、`textContent` で本文（および reasoning がある場合は別要素）を累積表示。完了後に `buildAssistantMarkdown`（reasoning は `<details>`）を **初めて** `MarkdownRenderer.render` し、プレーン層を隠して Markdown 層を表示（[`styles.css`](../styles.css) の `.ai-chat-md-stack` 等）。ストリーム用スタックも吹き出し内側に置く。
 - **ソースパス:** `MarkdownRenderer` の `sourcePath` 引数は **`lockedTarget.path`**。未ロック時は `""`。
 
 ### 6.5 ターゲットノートのロック
 
-1. **未ロック**で Send が押されたとき、`workspace.getActiveFile()` が **なければ** Notice して中断（メッセージ: `open a note and focus it...`）。
-2. あればそのファイルを `lockedTarget` に代入し、ラベル更新。
-3. その後 **`vault.getAbstractFileByPath(lockedTarget.path)`** で存在確認。`TFile` でなければ Notice（`locked note is missing...`）して中断。成功時は参照を最新の `TFile` に更新。
+**プルダウン（`ai-chat-target-select`）**
+
+- 先頭オプション **Active note (on send)**（`value` 空）が **既定**: 初回送信時は従来どおり **`workspace.getActiveFile()`** をロック対象とする。アクティブファイルが無ければ Notice して中断。
+- 特定パスを選んだ場合: 初回送信時にそのパスを `vault.getAbstractFileByPath` で解決し、`TFile` ならロック。無ければ Notice して中断。
+- **パフォーマンス:** Vault 全体の Markdown を列挙せず、`getMarkdownFiles()` を **`stat.mtime` 降順**でソートし、**最新 50 件のみ** を `<option>` に載せる（巨大 Vault での DOM フリーズ回避）。一覧に無いノートは「アクティブノート」経由でロックするか、View を開き直してリスト再構築する。
+- **ロック後:** `lockedTarget` が存在する間は `<select>` を **無効化**（セッションと追記先の整合）。**Clear session** で `lockedTarget` を消すと `<select>` を再有効化し、値は **Active note** にリセット、オプション一覧を再構築する。
+
+**ロック後の共通処理**
+
+1. 確定した `lockedTarget` について **`vault.getAbstractFileByPath(lockedTarget.path)`** で存在確認。`TFile` でなければ Notice（`locked note is missing...`）して中断。成功時は参照を最新の `TFile` に更新。
 
 **ロック解除:** **Clear session** のみ（`messages` 空、`lockedTarget` null）。
 
@@ -292,5 +300,6 @@ Obsidian 標準のプラグインデータ（`saveData` / `loadData`）。Vault 
 | 2026-04-06 | Phase B 相当: Wikilink コンテキスト（opt-in）、append 失敗時 DOM ロールバック、Gemini/DeepSeek パース調整、ADR `finish_reason` 補足、`docs/archive/SPEC.consulting.md` へ旧コンサル SPEC 退避 | `836a61542fe120ce7c69fdbb46c37018113c7e8b` |
 | 2026-04-06 | **v1.0.0** リリース確定: `manifest.json` / `package.json` を `1.0.0` に | `5960c92c34461bd88ded3f1b49bbdfd62d681815` |
 | 2026-04-06 | git-flow 採用: [`docs/GITFLOW.md`](GITFLOW.md)、`develop` ブランチ作成、`RECORDS.md` からリンク | `e5bfc50a271ea85f1dcee50130890afd0b3d3623` |
+| 2026-04-06 | Phase C（UI）: ターゲット `<select>`（`mtime` 降順・最新 50 件）、吹き出し左右レイアウト・内側 `overflow-x`/折り返し、Ctrl/Cmd+Enter 送信（`isComposing` ガード） | （未コミット可） |
 
 記録運用は [`docs/RECORDS.md`](RECORDS.md) を参照。
